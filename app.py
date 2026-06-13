@@ -9,6 +9,17 @@ import streamlit as st
 
 
 DATA_PATH = Path(__file__).with_name("albums.csv")
+REQUIRED_COLUMNS = [
+    "Artist",
+    "Album",
+    "Released",
+    "Rating",
+    "Notes",
+    "Global Rating",
+    "Genres",
+    "Origin",
+    "Generated Date",
+]
 RATING_ORDER = ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]
 CHART_HEIGHT = 390
 WIDE_CHART_HEIGHT = 340
@@ -22,12 +33,89 @@ st.set_page_config(
 )
 
 
+class AlbumDataError(ValueError):
+    """Raised when albums.csv cannot be safely used by the dashboard."""
+
+
+def clean_text_status(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip()
+
+
+def row_numbers(mask: pd.Series) -> str:
+    rows = (mask[mask].index + 2).astype(str).tolist()
+    if len(rows) <= 8:
+        return ", ".join(rows)
+    return ", ".join(rows[:8]) + f", and {len(rows) - 8} more"
+
+
+def normalize_rating_status(series: pd.Series) -> pd.Series:
+    status = clean_text_status(series).str.lower()
+    numeric = pd.to_numeric(status, errors="coerce")
+    numeric_rating = numeric.notna() & numeric.between(1, 5) & numeric.mod(1).eq(0)
+    status.loc[numeric_rating] = numeric.loc[numeric_rating].astype(int).astype(str)
+    status.loc[status.eq("")] = "unrated"
+    return status
+
+
+def validate_albums_csv(df: pd.DataFrame) -> list[str]:
+    errors: list[str] = []
+    missing = [column for column in REQUIRED_COLUMNS if column not in df.columns]
+    if missing:
+        errors.append("Missing required columns: " + ", ".join(missing))
+        return errors
+
+    artist_blank = clean_text_status(df["Artist"]).eq("")
+    if artist_blank.any():
+        errors.append(f"Artist is blank on row(s): {row_numbers(artist_blank)}")
+
+    album_blank = clean_text_status(df["Album"]).eq("")
+    if album_blank.any():
+        errors.append(f"Album is blank on row(s): {row_numbers(album_blank)}")
+
+    released = pd.to_numeric(df["Released"], errors="coerce")
+    released_invalid = released.isna() | released.lt(0) | released.mod(1).ne(0)
+    if released_invalid.any():
+        errors.append(f"Released must be a whole year on row(s): {row_numbers(released_invalid)}")
+
+    global_raw = clean_text_status(df["Global Rating"])
+    global_rating = pd.to_numeric(global_raw, errors="coerce")
+    global_invalid = global_raw.ne("") & global_rating.isna()
+    if global_invalid.any():
+        errors.append(f"Global Rating must be numeric when present on row(s): {row_numbers(global_invalid)}")
+
+    generated_date = pd.to_datetime(df["Generated Date"], errors="coerce", utc=True)
+    generated_invalid = generated_date.isna()
+    if generated_invalid.any():
+        errors.append(f"Generated Date must be parseable on row(s): {row_numbers(generated_invalid)}")
+
+    rating_raw = clean_text_status(df["Rating"]).str.lower()
+    numeric_rating = pd.to_numeric(rating_raw, errors="coerce")
+    rating_valid = (
+        rating_raw.eq("")
+        | rating_raw.eq("did-not-listen")
+        | (numeric_rating.notna() & numeric_rating.between(1, 5) & numeric_rating.mod(1).eq(0))
+    )
+    rating_invalid = ~rating_valid
+    if rating_invalid.any():
+        errors.append(
+            "Rating must be 1-5, did-not-listen, or blank on row(s): "
+            + row_numbers(rating_invalid)
+        )
+
+    return errors
+
+
 @st.cache_data(show_spinner=False)
 def load_data(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = pd.read_csv(path)
-    df["RatingNum"] = pd.to_numeric(df["Rating"], errors="coerce")
-    df["RatingStatus"] = df["Rating"].fillna("unrated").astype(str)
-    df.loc[df["RatingStatus"].eq("nan"), "RatingStatus"] = "unrated"
+    errors = validate_albums_csv(df)
+    if errors:
+        raise AlbumDataError("\n".join(errors))
+
+    df["Released"] = pd.to_numeric(df["Released"], errors="raise").astype(int)
+    df["Global Rating"] = pd.to_numeric(df["Global Rating"], errors="coerce")
+    df["RatingStatus"] = normalize_rating_status(df["Rating"])
+    df["RatingNum"] = pd.to_numeric(df["RatingStatus"], errors="coerce")
     df["GeneratedDate"] = pd.to_datetime(df["Generated Date"], errors="coerce", utc=True).dt.tz_convert(None)
     df["YearAdded"] = df["GeneratedDate"].dt.year
     df["MonthAdded"] = df["GeneratedDate"].dt.to_period("M").dt.to_timestamp()
@@ -153,7 +241,15 @@ def notes_keywords(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
-    df, exploded = load_data(DATA_PATH)
+    try:
+        df, exploded = load_data(DATA_PATH)
+    except AlbumDataError as exc:
+        st.error("albums.csv has data issues.")
+        st.markdown("Fix these rows, then rerun the dashboard:")
+        for message in str(exc).splitlines():
+            st.write(f"- {message}")
+        st.stop()
+
     selected, selected_genres = filtered_data(df, exploded)
 
     st.title("Halchemy Album Dashboard")
