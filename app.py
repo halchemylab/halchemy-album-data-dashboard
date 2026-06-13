@@ -10,6 +10,8 @@ import streamlit as st
 
 DATA_PATH = Path(__file__).with_name("albums.csv")
 RATING_ORDER = ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]
+CHART_HEIGHT = 390
+WIDE_CHART_HEIGHT = 340
 
 
 st.set_page_config(
@@ -59,12 +61,30 @@ def compact_table(data: pd.DataFrame, cols: list[str], height: int = 330) -> Non
         hide_index=True,
         height=height,
         column_config={
+            "Album": st.column_config.TextColumn("Album", width="medium"),
+            "Artist": st.column_config.TextColumn("Artist", width="medium"),
             "RatingNum": st.column_config.NumberColumn("Rating", format="%.1f"),
             "Global Rating": st.column_config.NumberColumn("Global", format="%.2f"),
             "RatingDelta": st.column_config.NumberColumn("Delta", format="%+.2f"),
             "Released": st.column_config.NumberColumn("Year", format="%d"),
+            "Genres": st.column_config.TextColumn("Genres", width="medium"),
+            "OriginLabel": st.column_config.TextColumn("Origin"),
+            "RatingStatus": st.column_config.TextColumn("Status"),
         },
     )
+
+
+def polish_chart(fig, *, height: int = CHART_HEIGHT, x_title: str | None = None, y_title: str | None = None):
+    fig.update_layout(
+        height=height,
+        margin=dict(l=10, r=10, t=36, b=10),
+        legend_title_text=None,
+    )
+    if x_title is not None:
+        fig.update_xaxes(title=x_title)
+    if y_title is not None:
+        fig.update_yaxes(title=y_title)
+    return fig
 
 
 def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -138,8 +158,7 @@ def main() -> None:
 
     st.title("Halchemy Album Dashboard")
     st.caption(
-        "A living map of ratings, genre instincts, era bias, outlier loves, "
-        "and albums still waiting for a verdict."
+        "Start with the catalog, follow the taste patterns, then drill into the albums worth inspecting."
     )
 
     if selected.empty:
@@ -160,13 +179,10 @@ def main() -> None:
         delta = selected["RatingDelta"].mean()
         st.metric("Taste Gap", f"{delta:+.2f}" if pd.notna(delta) else "-", help="You minus global")
 
-    tab_overview, tab_taste, tab_gaps, tab_explorer = st.tabs(
-        ["Overview", "Taste Profile", "Global Gap", "Explorer"]
-    )
+    tab_overview, tab_taste, tab_gaps, tab_explorer = st.tabs(["Catalog", "Taste", "Outliers", "Explorer"])
 
     with tab_overview:
-        st.subheader("Catalog Pulse")
-        st.caption("How the collection is distributed across ratings, release eras, and entry dates.")
+        st.subheader("Catalog")
 
         left, right = st.columns([1.05, 1])
         rating_counts = (
@@ -181,10 +197,10 @@ def main() -> None:
             x="Rating",
             y="Albums",
             color="Rating",
-            title="Rating distribution",
+            title="Rating mix",
         )
         fig_rating.update_layout(showlegend=False)
-        left.plotly_chart(fig_rating, use_container_width=True)
+        left.plotly_chart(polish_chart(fig_rating, x_title=None, y_title="Albums"), use_container_width=True)
 
         decade = (
             selected.groupby("Decade", as_index=False)
@@ -196,19 +212,19 @@ def main() -> None:
             x="Decade",
             y="Albums",
             color="AvgRating",
-            title="Albums by decade",
+            title="Era spread",
         )
-        right.plotly_chart(fig_decade, use_container_width=True)
+        right.plotly_chart(polish_chart(fig_decade, x_title=None, y_title="Albums"), use_container_width=True)
 
         by_month = selected.dropna(subset=["MonthAdded"]).groupby("MonthAdded", as_index=False).size()
-        fig_month = px.area(by_month, x="MonthAdded", y="size", title="Albums added over time")
-        fig_month.update_xaxes(title=None)
-        fig_month.update_yaxes(title="Albums")
-        st.plotly_chart(fig_month, use_container_width=True)
+        fig_month = px.area(by_month, x="MonthAdded", y="size", title="Listening timeline")
+        st.plotly_chart(
+            polish_chart(fig_month, height=WIDE_CHART_HEIGHT, x_title=None, y_title="Albums"),
+            use_container_width=True,
+        )
 
     with tab_taste:
-        st.subheader("Taste Profile")
-        st.caption("Where your ratings cluster by genre, origin, and era.")
+        st.subheader("Taste")
 
         genre_summary = (
             selected_genres.groupby("Genre", as_index=False)
@@ -225,10 +241,10 @@ def main() -> None:
             y="Genre",
             orientation="h",
             color="Albums",
-            title="Highest-rated genres",
+            title="Genre signals",
         )
-        fig_genre.update_xaxes(range=[0, 5], title="Average rating")
-        left.plotly_chart(fig_genre, use_container_width=True)
+        fig_genre.update_xaxes(range=[0, 5])
+        left.plotly_chart(polish_chart(fig_genre, x_title="Avg rating", y_title=None), use_container_width=True)
 
         origin = (
             selected.groupby("OriginLabel", as_index=False)
@@ -242,12 +258,12 @@ def main() -> None:
             size="Albums",
             color="OriginLabel",
             text="OriginLabel",
-            title="Origin: you vs global",
+            title="Origin patterns",
         )
         fig_origin.update_traces(textposition="top center")
         fig_origin.update_xaxes(range=[2.5, 3.8])
         fig_origin.update_yaxes(range=[1, 5])
-        right.plotly_chart(fig_origin, use_container_width=True)
+        right.plotly_chart(polish_chart(fig_origin, x_title="Global", y_title="Rating"), use_container_width=True)
 
         words = notes_keywords(selected)
         if not words.empty:
@@ -256,14 +272,16 @@ def main() -> None:
                 x="Count",
                 y="Word",
                 orientation="h",
-                title="Most-used note words",
+                title="Language in your notes",
                 color="Count",
             )
-            st.plotly_chart(fig_words, use_container_width=True)
+            st.plotly_chart(
+                polish_chart(fig_words, height=WIDE_CHART_HEIGHT, x_title="Mentions", y_title=None),
+                use_container_width=True,
+            )
 
     with tab_gaps:
-        st.subheader("Consensus Breakers")
-        st.caption("The albums where your ear most disagrees with the crowd.")
+        st.subheader("Outliers")
 
         gap_df = selected.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
         fig_gap = px.scatter(
@@ -281,30 +299,34 @@ def main() -> None:
                 "Global Rating": ":.2f",
                 "RatingNum": ":.1f",
             },
-            title="Your rating vs global rating",
+            title="You vs consensus",
         )
         fig_gap.add_shape(type="line", x0=1, y0=1, x1=5, y1=5, line=dict(dash="dash"))
         fig_gap.update_yaxes(range=[0.7, 5.3], dtick=1)
         fig_gap.update_xaxes(range=[1.7, 4.6])
-        st.plotly_chart(fig_gap, use_container_width=True)
+        st.plotly_chart(
+            polish_chart(fig_gap, height=430, x_title="Global", y_title="Rating"),
+            use_container_width=True,
+        )
 
         love, reject = st.columns(2)
         with love:
-            st.markdown("**You rate these far above consensus**")
+            st.markdown("**Above Consensus**")
             compact_table(
-                gap_df.sort_values("RatingDelta", ascending=False).head(12),
+                gap_df.sort_values("RatingDelta", ascending=False).head(10),
                 ["Artist", "Album", "Released", "RatingNum", "Global Rating", "RatingDelta", "Genres"],
+                height=300,
             )
         with reject:
-            st.markdown("**Consensus likes these more than you do**")
+            st.markdown("**Below Consensus**")
             compact_table(
-                gap_df.sort_values("RatingDelta").head(12),
+                gap_df.sort_values("RatingDelta").head(10),
                 ["Artist", "Album", "Released", "RatingNum", "Global Rating", "RatingDelta", "Genres"],
+                height=300,
             )
 
     with tab_explorer:
-        st.subheader("Album Explorer")
-        st.caption("Search, sort, and inspect notes without leaving the dashboard.")
+        st.subheader("Explorer")
 
         sort_options = {
             "Newest release": ("Released", False),
@@ -318,34 +340,24 @@ def main() -> None:
         sort_label = st.selectbox("Sort albums", list(sort_options.keys()), index=0)
         sort_col, ascending = sort_options[sort_label]
         table_df = selected.sort_values(sort_col, ascending=ascending, na_position="last")
-        st.dataframe(
-            table_df[
-                [
-                    "Artist",
-                    "Album",
-                    "Released",
-                    "RatingStatus",
-                    "RatingNum",
-                    "Global Rating",
-                    "RatingDelta",
-                    "Genres",
-                    "OriginLabel",
-                    "Notes",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-            height=640,
-            column_config={
-                "RatingStatus": st.column_config.TextColumn("Status"),
-                "RatingNum": st.column_config.NumberColumn("Rating", format="%.1f"),
-                "Global Rating": st.column_config.NumberColumn("Global", format="%.2f"),
-                "RatingDelta": st.column_config.NumberColumn("Delta", format="%+.2f"),
-                "OriginLabel": st.column_config.TextColumn("Origin"),
-                "Released": st.column_config.NumberColumn("Year", format="%d"),
-                "Notes": st.column_config.TextColumn("Notes", width="large"),
-            },
-        )
+        explorer_cols = [
+            "Artist",
+            "Album",
+            "Released",
+            "RatingStatus",
+            "RatingNum",
+            "Global Rating",
+            "RatingDelta",
+            "Genres",
+            "OriginLabel",
+            "Notes",
+        ]
+
+        st.markdown("**Top Matches**")
+        compact_table(table_df.head(25), explorer_cols, height=430)
+
+        with st.expander("Full table"):
+            compact_table(table_df, explorer_cols, height=640)
 
 
 if __name__ == "__main__":
