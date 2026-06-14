@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +24,12 @@ REQUIRED_COLUMNS = [
 RATING_ORDER = ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]
 CHART_HEIGHT = 390
 WIDE_CHART_HEIGHT = 340
+FILTER_SEARCH_KEY = "filter_search"
+FILTER_GENRES_KEY = "filter_genres"
+FILTER_ORIGINS_KEY = "filter_origins"
+FILTER_DECADES_KEY = "filter_decades"
+FILTER_STATUSES_KEY = "filter_statuses"
+FILTER_YEAR_RANGE_KEY = "filter_year_range"
 
 
 st.set_page_config(
@@ -175,17 +182,96 @@ def polish_chart(fig, *, height: int = CHART_HEIGHT, x_title: str | None = None,
     return fig
 
 
-def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def reset_filter_state(year_min: int, year_max: int) -> None:
+    st.session_state[FILTER_SEARCH_KEY] = ""
+    st.session_state[FILTER_GENRES_KEY] = []
+    st.session_state[FILTER_ORIGINS_KEY] = []
+    st.session_state[FILTER_DECADES_KEY] = []
+    st.session_state[FILTER_STATUSES_KEY] = []
+    st.session_state[FILTER_YEAR_RANGE_KEY] = (year_min, year_max)
+
+
+def ensure_filter_defaults(year_min: int, year_max: int) -> None:
+    defaults = {
+        FILTER_SEARCH_KEY: "",
+        FILTER_GENRES_KEY: [],
+        FILTER_ORIGINS_KEY: [],
+        FILTER_DECADES_KEY: [],
+        FILTER_STATUSES_KEY: [],
+        FILTER_YEAR_RANGE_KEY: (year_min, year_max),
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+    current_min, current_max = st.session_state[FILTER_YEAR_RANGE_KEY]
+    clamped_min = max(year_min, min(year_max, current_min))
+    clamped_max = max(year_min, min(year_max, current_max))
+    if (clamped_min, clamped_max) != (current_min, current_max):
+        st.session_state[FILTER_YEAR_RANGE_KEY] = (clamped_min, clamped_max)
+
+
+def active_filter_labels(
+    *,
+    query: str,
+    genres: list[str],
+    origins: list[str],
+    decades: list[str],
+    statuses: list[str],
+    year_range: tuple[int, int],
+    full_year_range: tuple[int, int],
+) -> list[str]:
+    labels: list[str] = []
+    if query:
+        labels.append(f'Search: "{query}"')
+    if genres:
+        labels.append("Genres: " + ", ".join(genres))
+    if origins:
+        labels.append("Origin: " + ", ".join(origins))
+    if decades:
+        labels.append("Decades: " + ", ".join(decades))
+    if statuses:
+        labels.append("Status: " + ", ".join(statuses))
+    if year_range != full_year_range:
+        labels.append(f"Years: {year_range[0]}-{year_range[1]}")
+    return labels
+
+
+def render_active_filters(labels: list[str], year_min: int, year_max: int) -> None:
+    left, right = st.columns([0.82, 0.18], vertical_alignment="center")
+    with left:
+        st.markdown("**Active Filters**")
+        if labels:
+            chips = " ".join(f"<span class='filter-chip'>{escape(label)}</span>" for label in labels)
+            st.markdown(f"<div class='filter-strip'>{chips}</div>", unsafe_allow_html=True)
+        else:
+            st.caption("All albums are included.")
+    with right:
+        st.button(
+            "Clear filters",
+            disabled=not labels,
+            use_container_width=True,
+            on_click=reset_filter_state,
+            args=(year_min, year_max),
+        )
+
+
+def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     st.sidebar.markdown("### Filters")
 
-    query = st.sidebar.text_input("Search", placeholder="artist, album, note, genre").strip().lower()
-    all_genres = sorted(exploded["Genre"].dropna().unique())
-    genres = st.sidebar.multiselect("Genres", all_genres)
-    origins = st.sidebar.multiselect("Origin", sorted(df["OriginLabel"].dropna().unique()))
-    decades = st.sidebar.multiselect("Decades", sorted(df["Decade"].unique()))
-    statuses = st.sidebar.multiselect("Rating status", RATING_ORDER, default=[])
     year_min, year_max = int(df["Released"].min()), int(df["Released"].max())
-    year_range = st.sidebar.slider("Release years", year_min, year_max, (year_min, year_max))
+    ensure_filter_defaults(year_min, year_max)
+
+    query = st.sidebar.text_input(
+        "Search",
+        placeholder="artist, album, note, genre",
+        key=FILTER_SEARCH_KEY,
+    ).strip().lower()
+    all_genres = sorted(exploded["Genre"].dropna().unique())
+    genres = st.sidebar.multiselect("Genres", all_genres, key=FILTER_GENRES_KEY)
+    origins = st.sidebar.multiselect("Origin", sorted(df["OriginLabel"].dropna().unique()), key=FILTER_ORIGINS_KEY)
+    decades = st.sidebar.multiselect("Decades", sorted(df["Decade"].unique()), key=FILTER_DECADES_KEY)
+    statuses = st.sidebar.multiselect("Rating status", RATING_ORDER, key=FILTER_STATUSES_KEY)
+    year_range = st.sidebar.slider("Release years", year_min, year_max, key=FILTER_YEAR_RANGE_KEY)
 
     mask = df["Released"].between(year_range[0], year_range[1])
     if query:
@@ -205,7 +291,16 @@ def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFram
     selected = df.loc[mask].copy()
     selected_keys = pd.MultiIndex.from_frame(selected[["Artist", "Album", "Released"]])
     exploded_keys = pd.MultiIndex.from_frame(exploded[["Artist", "Album", "Released"]])
-    return selected, exploded.loc[exploded_keys.isin(selected_keys)].copy()
+    labels = active_filter_labels(
+        query=query,
+        genres=genres,
+        origins=origins,
+        decades=decades,
+        statuses=statuses,
+        year_range=year_range,
+        full_year_range=(year_min, year_max),
+    )
+    return selected, exploded.loc[exploded_keys.isin(selected_keys)].copy(), labels
 
 
 def notes_keywords(df: pd.DataFrame) -> pd.DataFrame:
@@ -250,16 +345,50 @@ def main() -> None:
             st.write(f"- {message}")
         st.stop()
 
-    selected, selected_genres = filtered_data(df, exploded)
+    selected, selected_genres, active_filters = filtered_data(df, exploded)
 
     st.title("Halchemy Album Dashboard")
     st.caption(
         "Start with the catalog, follow the taste patterns, then drill into the albums worth inspecting."
     )
+    st.markdown(
+        """
+        <style>
+        .filter-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin-top: -0.35rem;
+        }
+        .filter-chip {
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid rgba(49, 51, 63, 0.18);
+            border-radius: 999px;
+            padding: 0.18rem 0.55rem;
+            background: rgba(49, 51, 63, 0.04);
+            color: rgb(49, 51, 63);
+            font-size: 0.85rem;
+            line-height: 1.35;
+        }
+        @media (prefers-color-scheme: dark) {
+            .filter-chip {
+                border-color: rgba(250, 250, 250, 0.2);
+                background: rgba(250, 250, 250, 0.08);
+                color: rgb(250, 250, 250);
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if selected.empty:
+        render_active_filters(active_filters, int(df["Released"].min()), int(df["Released"].max()))
         st.warning("No albums match the current filters.")
         return
+
+    render_active_filters(active_filters, int(df["Released"].min()), int(df["Released"].max()))
 
     rated = selected["RatingNum"].dropna()
     c1, c2, c3, c4, c5 = st.columns(5)
