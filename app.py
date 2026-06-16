@@ -604,6 +604,33 @@ def main() -> None:
                 use_container_width=True,
             )
 
+        if not genre_summary.empty:
+            fig_genre_map = px.scatter(
+                genre_summary,
+                x="Albums",
+                y="AvgRating",
+                size="Albums",
+                color="Delta",
+                text="Genre",
+                hover_data={
+                    "Genre": True,
+                    "Albums": True,
+                    "AvgRating": ":.2f",
+                    "AvgGlobal": ":.2f",
+                    "Delta": ":+.2f",
+                },
+                title="Genre map",
+                size_max=46,
+                color_continuous_scale="RdBu",
+                color_continuous_midpoint=0,
+            )
+            fig_genre_map.update_traces(textposition="top center")
+            fig_genre_map.update_yaxes(range=[0.8, 5.2])
+            st.plotly_chart(
+                polish_chart(fig_genre_map, height=430, x_title="Albums", y_title="Avg rating"),
+                use_container_width=True,
+            )
+
     with tab_gaps:
         st.subheader("Outliers")
 
