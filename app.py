@@ -24,6 +24,15 @@ REQUIRED_COLUMNS = [
     "Generated Date",
 ]
 RATING_ORDER = ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]
+RATING_COLOR_MAP = {
+    "1": "#d73027",
+    "2": "#f46d43",
+    "3": "#fdae61",
+    "4": "#4575b4",
+    "5": "#1a9850",
+    "did-not-listen": "#8c8c8c",
+    "unrated": "#c9c9c9",
+}
 CHART_HEIGHT = 390
 WIDE_CHART_HEIGHT = 340
 FILTER_SEARCH_KEY = "filter_search"
@@ -307,6 +316,17 @@ def render_active_filters(labels: list[str], year_min: int, year_max: int) -> No
         )
 
 
+def render_rating_key(statuses: pd.Series) -> None:
+    present = [status for status in RATING_ORDER if status in set(statuses)]
+    swatches = " ".join(
+        "<span class='rating-key-item'>"
+        f"<span class='rating-key-dot' style='background:{RATING_COLOR_MAP[status]}'></span>"
+        f"{escape(status)}</span>"
+        for status in present
+    )
+    st.markdown(f"<div class='rating-key'>{swatches}</div>", unsafe_allow_html=True)
+
+
 def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     st.sidebar.markdown("### Filters")
 
@@ -423,11 +443,34 @@ def main() -> None:
             font-size: 0.85rem;
             line-height: 1.35;
         }
+        .rating-key {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+            margin: -0.25rem 0 0.85rem;
+            color: rgba(49, 51, 63, 0.76);
+            font-size: 0.84rem;
+        }
+        .rating-key-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.28rem;
+            white-space: nowrap;
+        }
+        .rating-key-dot {
+            width: 0.62rem;
+            height: 0.62rem;
+            border-radius: 999px;
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+        }
         @media (prefers-color-scheme: dark) {
             .filter-chip {
                 border-color: rgba(250, 250, 250, 0.2);
                 background: rgba(250, 250, 250, 0.08);
                 color: rgb(250, 250, 250);
+            }
+            .rating-key {
+                color: rgba(250, 250, 250, 0.78);
             }
         }
         </style>
@@ -456,6 +499,8 @@ def main() -> None:
         delta = selected["RatingDelta"].mean()
         st.metric("Taste Gap", f"{delta:+.2f}" if pd.notna(delta) else "-", help="You minus global")
 
+    render_rating_key(selected["RatingStatus"])
+
     tab_overview, tab_taste, tab_gaps, tab_explorer = st.tabs(["Catalog", "Taste", "Outliers", "Explorer"])
 
     with tab_overview:
@@ -475,6 +520,8 @@ def main() -> None:
             y="Albums",
             color="Rating",
             title="Rating mix",
+            category_orders={"Rating": RATING_ORDER},
+            color_discrete_map=RATING_COLOR_MAP,
         )
         fig_rating.update_layout(showlegend=False)
         left.plotly_chart(polish_chart(fig_rating, x_title=None, y_title="Albums"), use_container_width=True)
