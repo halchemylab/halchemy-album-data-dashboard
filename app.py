@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from collections import Counter
 from html import escape
 from pathlib import Path
@@ -30,6 +32,16 @@ FILTER_ORIGINS_KEY = "filter_origins"
 FILTER_DECADES_KEY = "filter_decades"
 FILTER_STATUSES_KEY = "filter_statuses"
 FILTER_YEAR_RANGE_KEY = "filter_year_range"
+COVER_PALETTES = [
+    ("#264653", "#2a9d8f", "#e9c46a"),
+    ("#1d3557", "#457b9d", "#f1faee"),
+    ("#3a0ca3", "#7209b7", "#f72585"),
+    ("#283618", "#606c38", "#fefae0"),
+    ("#14213d", "#fca311", "#e5e5e5"),
+    ("#2b2d42", "#8d99ae", "#edf2f4"),
+    ("#5f0f40", "#9a031e", "#fb8b24"),
+    ("#0f4c5c", "#e36414", "#f6f1d1"),
+]
 
 
 st.set_page_config(
@@ -62,6 +74,41 @@ def normalize_rating_status(series: pd.Series) -> pd.Series:
     status.loc[numeric_rating] = numeric.loc[numeric_rating].astype(int).astype(str)
     status.loc[status.eq("")] = "unrated"
     return status
+
+
+def short_cover_line(text: object, limit: int) -> str:
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "..."
+
+
+def album_cover_data_uri(artist: object, album: object, genre: object) -> str:
+    key = f"{artist}|{album}|{genre}".encode("utf-8")
+    digest = hashlib.sha256(key).digest()
+    bg, accent, text = COVER_PALETTES[digest[0] % len(COVER_PALETTES)]
+    angle = digest[1] % 360
+    ring_x = 22 + digest[2] % 58
+    ring_y = 18 + digest[3] % 64
+    album_line = escape(short_cover_line(album, 18))
+    artist_line = escape(short_cover_line(artist, 17))
+    genre_line = escape(short_cover_line(genre, 18).upper())
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+<defs>
+<linearGradient id="g" gradientTransform="rotate({angle})">
+<stop offset="0" stop-color="{bg}"/>
+<stop offset="1" stop-color="{accent}"/>
+</linearGradient>
+</defs>
+<rect width="96" height="96" rx="12" fill="url(#g)"/>
+<circle cx="{ring_x}" cy="{ring_y}" r="26" fill="none" stroke="{text}" stroke-opacity=".22" stroke-width="11"/>
+<path d="M0 72 C24 58 42 86 96 64 L96 96 L0 96 Z" fill="{text}" fill-opacity=".13"/>
+<text x="9" y="45" fill="{text}" font-family="Arial, sans-serif" font-size="11" font-weight="700">{album_line}</text>
+<text x="9" y="61" fill="{text}" font-family="Arial, sans-serif" font-size="9" opacity=".86">{artist_line}</text>
+<text x="9" y="82" fill="{text}" font-family="Arial, sans-serif" font-size="7" opacity=".74">{genre_line}</text>
+</svg>"""
+    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
 
 
 def validate_albums_csv(df: pd.DataFrame) -> list[str]:
@@ -130,6 +177,10 @@ def load_data(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     df["OriginLabel"] = df["Origin"].fillna("unknown").str.upper()
     df["RatingDelta"] = df["RatingNum"] - df["Global Rating"]
     df["PrimaryGenre"] = df["Genres"].fillna("unknown").str.split(",").str[0].str.strip()
+    df["Cover"] = [
+        album_cover_data_uri(row.Artist, row.Album, row.PrimaryGenre)
+        for row in df[["Artist", "Album", "PrimaryGenre"]].itertuples(index=False)
+    ]
     df["SearchText"] = (
         df["Artist"].fillna("")
         + " "
@@ -157,6 +208,7 @@ def compact_table(data: pd.DataFrame, cols: list[str], height: int = 330) -> Non
         height=height,
         column_config={
             "Album": st.column_config.TextColumn("Album", width="medium"),
+            "Cover": st.column_config.ImageColumn("Cover", width="small"),
             "Artist": st.column_config.TextColumn("Artist", width="medium"),
             "RatingNum": st.column_config.NumberColumn("Rating", format="%.1f"),
             "Global Rating": st.column_config.NumberColumn("Global", format="%.2f"),
@@ -566,6 +618,7 @@ def main() -> None:
         sort_col, ascending = sort_options[sort_label]
         table_df = selected.sort_values(sort_col, ascending=ascending, na_position="last")
         explorer_cols = [
+            "Cover",
             "Artist",
             "Album",
             "Released",
