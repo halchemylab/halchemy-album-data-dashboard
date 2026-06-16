@@ -540,6 +540,37 @@ def main() -> None:
         )
         right.plotly_chart(polish_chart(fig_decade, x_title=None, y_title="Albums"), use_container_width=True)
 
+        timeline_df = selected.sort_values(["Released", "Artist", "Album"]).copy()
+        timeline_df["TimelineSize"] = timeline_df["RatingNum"].fillna(2.5) + 3
+        decade_order = sorted(
+            timeline_df["Decade"].dropna().unique(),
+            key=lambda value: int(str(value).rstrip("s")),
+        )
+        fig_release_timeline = px.scatter(
+            timeline_df,
+            x="Released",
+            y="Decade",
+            color="RatingStatus",
+            size="TimelineSize",
+            hover_data={
+                "Artist": True,
+                "Album": True,
+                "Released": True,
+                "Genres": True,
+                "RatingStatus": True,
+                "TimelineSize": False,
+            },
+            title="Album timeline",
+            category_orders={"Decade": decade_order, "RatingStatus": RATING_ORDER},
+            color_discrete_map=RATING_COLOR_MAP,
+        )
+        fig_release_timeline.update_traces(marker=dict(line=dict(width=0.7, color="rgba(49, 51, 63, 0.35)")))
+        fig_release_timeline.update_xaxes(dtick=5)
+        st.plotly_chart(
+            polish_chart(fig_release_timeline, height=430, x_title="Release year", y_title=None),
+            use_container_width=True,
+        )
+
         by_month = selected.dropna(subset=["MonthAdded"]).groupby("MonthAdded", as_index=False).size()
         fig_month = px.area(by_month, x="MonthAdded", y="size", title="Listening timeline")
         st.plotly_chart(
