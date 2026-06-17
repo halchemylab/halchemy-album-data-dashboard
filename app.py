@@ -161,6 +161,118 @@ def render_rating_key(statuses: pd.Series) -> None:
     st.markdown(f"<div class='rating-key'>{swatches}</div>", unsafe_allow_html=True)
 
 
+def render_soundprint(selected: pd.DataFrame, selected_genres: pd.DataFrame) -> None:
+    rated = selected.dropna(subset=["RatingNum"]).copy()
+    rated_genres = selected_genres.dropna(subset=["RatingNum"]).copy()
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        if not rated_genres.empty:
+            favorite_genre = (
+                rated_genres.groupby("Genre", as_index=False)
+                .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"))
+                .query("Albums >= 2")
+                .sort_values(["AvgRating", "Albums"], ascending=[False, False])
+                .head(1)
+            )
+            label = favorite_genre.iloc[0]["Genre"] if not favorite_genre.empty else "-"
+            detail = f"{favorite_genre.iloc[0]['AvgRating']:.2f} avg" if not favorite_genre.empty else None
+        else:
+            label = "-"
+            detail = None
+        st.metric("Signature Genre", label, detail)
+    with c2:
+        if not rated.empty:
+            favorite_decade = (
+                rated.groupby("Decade", as_index=False)
+                .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"))
+                .sort_values(["AvgRating", "Albums"], ascending=[False, False])
+                .head(1)
+            )
+            st.metric("Best Era", favorite_decade.iloc[0]["Decade"], f"{favorite_decade.iloc[0]['AvgRating']:.2f} avg")
+        else:
+            st.metric("Best Era", "-")
+    with c3:
+        if not rated.empty:
+            artist = (
+                rated.groupby("Artist", as_index=False)
+                .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"))
+                .query("Albums >= 2")
+                .sort_values(["AvgRating", "Albums"], ascending=[False, False])
+                .head(1)
+            )
+            label = artist.iloc[0]["Artist"] if not artist.empty else "-"
+            detail = f"{artist.iloc[0]['Albums']:.0f} albums" if not artist.empty else None
+        else:
+            label = "-"
+            detail = None
+        st.metric("Reliable Artist", label, detail)
+    with c4:
+        gap = selected["RatingDelta"].dropna()
+        st.metric("Consensus Bias", f"{gap.mean():+.2f}" if not gap.empty else "-", help="Average personal rating minus global rating")
+
+    left, right = st.columns([1, 1])
+    with left:
+        st.markdown("**Favorite Genre Signals**")
+        genre_summary = (
+            rated_genres.groupby("Genre", as_index=False)
+            .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"), AvgGlobal=("Global Rating", "mean"))
+            .query("Albums >= 2")
+            .sort_values(["AvgRating", "Albums"], ascending=[False, False])
+        )
+        if genre_summary.empty:
+            st.caption("Rate more albums to build genre signals.")
+        else:
+            genre_summary["Delta"] = genre_summary["AvgRating"] - genre_summary["AvgGlobal"]
+            compact_table(
+                genre_summary.head(12),
+                ["Genre", "Albums", "AvgRating", "AvgGlobal", "Delta"],
+                height=330,
+            )
+
+    with right:
+        st.markdown("**Biggest Personal Splits**")
+        split_df = selected.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
+        if split_df.empty:
+            st.caption("Add personal and global ratings to see where your taste diverges.")
+        else:
+            compact_table(
+                split_df.reindex(split_df["RatingDelta"].abs().sort_values(ascending=False).index).head(12),
+                ["Artist", "Album", "Released", "RatingNum", "Global Rating", "RatingDelta"],
+                height=330,
+            )
+
+    st.markdown("**Taste Map**")
+    if rated_genres.empty:
+        st.caption("Rate more albums to generate a taste map.")
+    else:
+        taste_map = (
+            rated_genres.groupby(["Decade", "Genre"], as_index=False)
+            .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"))
+            .query("Albums >= 2")
+        )
+        if taste_map.empty:
+            st.caption("More rated albums per genre and decade will unlock the taste map.")
+        else:
+            decade_order = sorted(taste_map["Decade"].unique(), key=lambda value: int(str(value).rstrip("s")))
+            fig_taste_map = px.scatter(
+                taste_map,
+                x="Decade",
+                y="Genre",
+                size="Albums",
+                color="AvgRating",
+                hover_data={"Albums": True, "AvgRating": ":.2f"},
+                title="Where your ratings cluster by era and genre",
+                category_orders={"Decade": decade_order},
+                color_continuous_scale="RdYlGn",
+                size_max=42,
+            )
+            st.plotly_chart(
+                polish_chart(fig_taste_map, height=500, x_title=None, y_title=None),
+                use_container_width=True,
+            )
+
+
 def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     st.sidebar.markdown("### Filters")
 
@@ -303,7 +415,9 @@ def main() -> None:
 
     render_rating_key(selected["RatingStatus"])
 
-    tab_overview, tab_taste, tab_gaps, tab_explorer = st.tabs(["Catalog", "Taste", "Outliers", "Explorer"])
+    tab_overview, tab_soundprint, tab_taste, tab_gaps, tab_explorer = st.tabs(
+        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer"]
+    )
 
     with tab_overview:
         st.subheader("Catalog")
@@ -379,6 +493,11 @@ def main() -> None:
             polish_chart(fig_month, height=WIDE_CHART_HEIGHT, x_title=None, y_title="Albums"),
             use_container_width=True,
         )
+
+    with tab_soundprint:
+        st.subheader("Your Soundprint")
+        st.caption("Personal patterns from the current catalog slice.")
+        render_soundprint(selected, selected_genres)
 
     with tab_taste:
         st.subheader("Taste")
