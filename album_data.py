@@ -21,6 +21,15 @@ REQUIRED_COLUMNS = [
     "Generated Date",
 ]
 RATING_ORDER = ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]
+RATING_LABEL_MAP = {
+    "1": "avoid",
+    "2": "not for me",
+    "3": "mixed",
+    "4": "strong",
+    "5": "essential",
+    "did-not-listen": "skipped",
+    "unrated": "unrated",
+}
 COVER_PALETTES = [
     ("#264653", "#2a9d8f", "#e9c46a"),
     ("#1d3557", "#457b9d", "#f1faee"),
@@ -149,6 +158,7 @@ def load_data(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     df["Released"] = pd.to_numeric(df["Released"], errors="raise").astype(int)
     df["Global Rating"] = pd.to_numeric(df["Global Rating"], errors="coerce")
     df["RatingStatus"] = normalize_rating_status(df["Rating"])
+    df["RatingLabel"] = df["RatingStatus"].map(RATING_LABEL_MAP)
     df["RatingNum"] = pd.to_numeric(df["RatingStatus"], errors="coerce")
     df["GeneratedDate"] = pd.to_datetime(df["Generated Date"], errors="coerce", utc=True).dt.tz_convert(None)
     df["YearAdded"] = df["GeneratedDate"].dt.year

@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from album_data import AlbumDataError, RATING_ORDER, load_data, notes_keywords
+from album_data import AlbumDataError, RATING_LABEL_MAP, RATING_ORDER, load_data, notes_keywords
 
 
 DATA_PATH = Path(__file__).with_name("albums.csv")
@@ -60,6 +60,11 @@ def compact_table(data: pd.DataFrame, cols: list[str], height: int = 330) -> Non
             "Genres": st.column_config.TextColumn("Genres", width="medium"),
             "OriginLabel": st.column_config.TextColumn("Origin"),
             "RatingStatus": st.column_config.TextColumn("Status"),
+            "RatingLabel": st.column_config.TextColumn("Personal Label"),
+            "Albums": st.column_config.NumberColumn("Albums", format="%d"),
+            "AvgRating": st.column_config.NumberColumn("Avg Rating", format="%.2f"),
+            "AvgGlobal": st.column_config.NumberColumn("Avg Global", format="%.2f"),
+            "Delta": st.column_config.NumberColumn("Delta", format="%+.2f"),
         },
     )
 
@@ -105,6 +110,13 @@ def ensure_filter_defaults(year_min: int, year_max: int) -> None:
         st.session_state[FILTER_YEAR_RANGE_KEY] = (clamped_min, clamped_max)
 
 
+def rating_display_label(status: str) -> str:
+    label = RATING_LABEL_MAP.get(status, status)
+    if status in {"did-not-listen", "unrated"}:
+        return label
+    return f"{label} ({status})"
+
+
 def active_filter_labels(
     *,
     query: str,
@@ -125,7 +137,7 @@ def active_filter_labels(
     if decades:
         labels.append("Decades: " + ", ".join(decades))
     if statuses:
-        labels.append("Status: " + ", ".join(statuses))
+        labels.append("Status: " + ", ".join(rating_display_label(status) for status in statuses))
     if year_range != full_year_range:
         labels.append(f"Years: {year_range[0]}-{year_range[1]}")
     return labels
@@ -155,7 +167,7 @@ def render_rating_key(statuses: pd.Series) -> None:
     swatches = " ".join(
         "<span class='rating-key-item'>"
         f"<span class='rating-key-dot' style='background:{RATING_COLOR_MAP[status]}'></span>"
-        f"{escape(status)}</span>"
+        f"{escape(rating_display_label(status))}</span>"
         for status in present
     )
     st.markdown(f"<div class='rating-key'>{swatches}</div>", unsafe_allow_html=True)
@@ -288,7 +300,12 @@ def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFram
     genres = st.sidebar.multiselect("Genres", all_genres, key=FILTER_GENRES_KEY)
     origins = st.sidebar.multiselect("Origin", sorted(df["OriginLabel"].dropna().unique()), key=FILTER_ORIGINS_KEY)
     decades = st.sidebar.multiselect("Decades", sorted(df["Decade"].unique()), key=FILTER_DECADES_KEY)
-    statuses = st.sidebar.multiselect("Rating status", RATING_ORDER, key=FILTER_STATUSES_KEY)
+    statuses = st.sidebar.multiselect(
+        "Personal rating label",
+        RATING_ORDER,
+        key=FILTER_STATUSES_KEY,
+        format_func=rating_display_label,
+    )
     year_range = st.sidebar.slider("Release years", year_min, year_max, key=FILTER_YEAR_RANGE_KEY)
 
     mask = df["Released"].between(year_range[0], year_range[1])
@@ -429,14 +446,18 @@ def main() -> None:
             .reindex([r for r in RATING_ORDER if r in selected["RatingStatus"].unique()])
             .reset_index()
         )
-        rating_counts.columns = ["Rating", "Albums"]
+        rating_counts.columns = ["RatingStatus", "Albums"]
+        rating_counts["Rating"] = rating_counts["RatingStatus"].map(rating_display_label)
         fig_rating = px.bar(
             rating_counts,
             x="Rating",
             y="Albums",
-            color="Rating",
+            color="RatingStatus",
             title="Rating mix",
-            category_orders={"Rating": RATING_ORDER},
+            category_orders={
+                "Rating": [rating_display_label(status) for status in RATING_ORDER],
+                "RatingStatus": RATING_ORDER,
+            },
             color_discrete_map=RATING_COLOR_MAP,
         )
         fig_rating.update_layout(showlegend=False)
@@ -473,7 +494,7 @@ def main() -> None:
                 "Album": True,
                 "Released": True,
                 "Genres": True,
-                "RatingStatus": True,
+                "RatingLabel": True,
                 "TimelineSize": False,
             },
             title="Album timeline",
@@ -648,7 +669,7 @@ def main() -> None:
             "Artist",
             "Album",
             "Released",
-            "RatingStatus",
+            "RatingLabel",
             "RatingNum",
             "Global Rating",
             "RatingDelta",

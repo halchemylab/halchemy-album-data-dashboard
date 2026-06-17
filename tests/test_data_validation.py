@@ -80,6 +80,7 @@ def test_load_data_normalizes_valid_rows(tmp_path: Path) -> None:
 
     assert df["Released"].tolist() == [1964, 1964, 1964]
     assert df["RatingStatus"].tolist() == ["5", "unrated", "did-not-listen"]
+    assert df["RatingLabel"].tolist() == ["essential", "unrated", "skipped"]
     assert df["RatingNum"].tolist()[0] == 5
     assert pd.isna(df["RatingNum"].tolist()[1])
     assert {"Genre", "RatingDelta", "SearchText"}.issubset(df.columns.union(exploded.columns))
