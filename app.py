@@ -28,6 +28,7 @@ FILTER_ORIGINS_KEY = "filter_origins"
 FILTER_DECADES_KEY = "filter_decades"
 FILTER_STATUSES_KEY = "filter_statuses"
 FILTER_YEAR_RANGE_KEY = "filter_year_range"
+EXPLORER_ALBUM_KEY = "explorer_album_key"
 
 
 st.set_page_config(
@@ -171,6 +172,87 @@ def render_rating_key(statuses: pd.Series) -> None:
         for status in present
     )
     st.markdown(f"<div class='rating-key'>{swatches}</div>", unsafe_allow_html=True)
+
+
+def album_key(album: pd.Series) -> str:
+    return f"{album['Artist']}\0{album['Album']}\0{album['Released']}"
+
+
+def album_selector_label(album: pd.Series) -> str:
+    return f"{album['Artist']} - {album['Album']} ({album['Released']})"
+
+
+def display_text(value: object) -> str:
+    if pd.isna(value) or str(value).strip() == "":
+        return "-"
+    return str(value)
+
+
+def display_number(value: object, precision: int = 2, signed: bool = False) -> str:
+    if pd.isna(value):
+        return "-"
+    sign = "+" if signed else ""
+    return f"{float(value):{sign}.{precision}f}"
+
+
+def display_date(value: object) -> str:
+    if pd.isna(value):
+        return "-"
+    return pd.Timestamp(value).strftime("%Y-%m-%d")
+
+
+def detail_row(label: str, value: object) -> None:
+    st.markdown(
+        "<div class='detail-row'>"
+        f"<span>{escape(label)}</span>"
+        f"<strong>{escape(display_text(value))}</strong>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_album_detail(album: pd.Series) -> None:
+    rating_label = display_text(album["RatingLabel"]).title()
+    if not pd.isna(album["RatingNum"]):
+        rating_label = f"{rating_label} ({display_number(album['RatingNum'], precision=1)})"
+
+    delta = album["RatingDelta"]
+    if pd.isna(delta):
+        delta_class = "neutral"
+    elif delta > 0:
+        delta_class = "positive"
+    elif delta < 0:
+        delta_class = "negative"
+    else:
+        delta_class = "neutral"
+
+    st.markdown("**Selected Album**")
+    st.image(album["Cover"], width=128)
+    st.markdown(f"### {escape(display_text(album['Album']))}", unsafe_allow_html=True)
+    st.caption(f"{display_text(album['Artist'])} - {display_text(album['Released'])}")
+
+    personal, global_rating, gap = st.columns(3)
+    personal.metric("Personal", rating_label)
+    global_rating.metric("Consensus", display_number(album["Global Rating"]))
+    with gap:
+        st.markdown(
+            f"<div class='gap-metric {delta_class}'>"
+            "<span>Gap</span>"
+            f"<strong>{escape(display_number(delta, signed=True))}</strong>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    detail_row("Genres", album["Genres"])
+    detail_row("Origin", album["OriginLabel"])
+    detail_row("Added", display_date(album["GeneratedDate"]))
+
+    st.markdown("**Notes**")
+    notes = display_text(album["Notes"])
+    if notes == "-":
+        st.caption("No notes yet.")
+    else:
+        st.write(notes)
 
 
 def render_soundprint(selected: pd.DataFrame, selected_genres: pd.DataFrame) -> None:
@@ -394,6 +476,46 @@ def main() -> None:
             border-radius: 999px;
             box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
         }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            border-bottom: 1px solid rgba(49, 51, 63, 0.12);
+            padding: 0.45rem 0;
+            font-size: 0.92rem;
+        }
+        .detail-row span {
+            color: rgba(49, 51, 63, 0.66);
+        }
+        .detail-row strong {
+            max-width: 68%;
+            text-align: right;
+            overflow-wrap: anywhere;
+        }
+        .gap-metric {
+            display: flex;
+            flex-direction: column;
+            gap: 0.1rem;
+            min-height: 4.5rem;
+            justify-content: center;
+        }
+        .gap-metric span {
+            color: rgba(49, 51, 63, 0.66);
+            font-size: 0.88rem;
+        }
+        .gap-metric strong {
+            font-size: 1.85rem;
+            line-height: 1.15;
+        }
+        .gap-metric.positive strong {
+            color: #1a9850;
+        }
+        .gap-metric.negative strong {
+            color: #d73027;
+        }
+        .gap-metric.neutral strong {
+            color: #8c8c8c;
+        }
         @media (prefers-color-scheme: dark) {
             .filter-chip {
                 border-color: rgba(250, 250, 250, 0.2);
@@ -402,6 +524,13 @@ def main() -> None:
             }
             .rating-key {
                 color: rgba(250, 250, 250, 0.78);
+            }
+            .detail-row {
+                border-bottom-color: rgba(250, 250, 250, 0.16);
+            }
+            .detail-row span,
+            .gap-metric span {
+                color: rgba(250, 250, 250, 0.68);
             }
         }
         </style>
@@ -663,7 +792,23 @@ def main() -> None:
         }
         sort_label = st.selectbox("Sort albums", list(sort_options.keys()), index=0)
         sort_col, ascending = sort_options[sort_label]
-        table_df = selected.sort_values(sort_col, ascending=ascending, na_position="last")
+        table_df = selected.sort_values(sort_col, ascending=ascending, na_position="last").copy()
+        table_df["AlbumKey"] = table_df.apply(album_key, axis=1)
+        album_labels = {
+            row["AlbumKey"]: album_selector_label(row)
+            for _, row in table_df[["AlbumKey", "Artist", "Album", "Released"]].iterrows()
+        }
+        album_keys = table_df["AlbumKey"].tolist()
+        if st.session_state.get(EXPLORER_ALBUM_KEY) not in album_keys:
+            st.session_state[EXPLORER_ALBUM_KEY] = album_keys[0]
+
+        selected_album_key = st.selectbox(
+            "Select album",
+            album_keys,
+            key=EXPLORER_ALBUM_KEY,
+            format_func=album_labels.get,
+        )
+        selected_album = table_df.loc[table_df["AlbumKey"].eq(selected_album_key)].iloc[0]
         explorer_cols = [
             "Cover",
             "Artist",
@@ -678,8 +823,12 @@ def main() -> None:
             "Notes",
         ]
 
-        st.markdown("**Top Matches**")
-        compact_table(table_df.head(25), explorer_cols, height=430)
+        detail_col, table_col = st.columns([0.36, 0.64], gap="large")
+        with detail_col:
+            render_album_detail(selected_album)
+        with table_col:
+            st.markdown("**Top Matches**")
+            compact_table(table_df.head(25), explorer_cols, height=430)
 
         with st.expander("Full table"):
             compact_table(table_df, explorer_cols, height=640)
