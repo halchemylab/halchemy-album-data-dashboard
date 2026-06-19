@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from html import escape
 from pathlib import Path
+import os
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from album_agent import answer_question, answer_question_with_openai
 from album_data import AlbumDataError, RATING_LABEL_MAP, RATING_ORDER, load_data, notes_keywords
 
 
@@ -29,6 +31,8 @@ FILTER_DECADES_KEY = "filter_decades"
 FILTER_STATUSES_KEY = "filter_statuses"
 FILTER_YEAR_RANGE_KEY = "filter_year_range"
 EXPLORER_ALBUM_KEY = "explorer_album_key"
+AGENT_QUESTION_KEY = "agent_question"
+AGENT_HISTORY_KEY = "agent_history"
 
 
 st.set_page_config(
@@ -42,6 +46,13 @@ st.set_page_config(
 @st.cache_data(show_spinner=False)
 def cached_load_data(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     return load_data(path)
+
+
+def optional_secret(name: str, default: str = "") -> str:
+    try:
+        return str(st.secrets.get(name, default))
+    except Exception:
+        return default
 
 
 def compact_table(data: pd.DataFrame, cols: list[str], height: int = 330) -> None:
@@ -253,6 +264,82 @@ def render_album_detail(album: pd.Series) -> None:
         st.caption("No notes yet.")
     else:
         st.write(notes)
+
+
+def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame) -> None:
+    st.subheader("Album Agent")
+    st.caption("Ask about the currently filtered albums. The agent chooses a data skill, runs it, and explains the result.")
+
+    st.session_state.setdefault(AGENT_HISTORY_KEY, [])
+
+    api_key = os.getenv("OPENAI_API_KEY") or optional_secret("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL") or optional_secret("OPENAI_MODEL", "gpt-5.5")
+    use_openai = st.toggle(
+        "Use OpenAI skill router",
+        value=bool(api_key),
+        disabled=not bool(api_key),
+        help="Set OPENAI_API_KEY as an environment variable or in .streamlit/secrets.toml.",
+    )
+    if not api_key:
+        st.caption("Running in local fallback mode because no OpenAI API key is configured.")
+
+    examples = [
+        "What should I listen to next?",
+        "What genres do I rate highest?",
+        "Where do I disagree with global ratings?",
+        "Give me three capstone-ready insights",
+    ]
+    example_cols = st.columns(len(examples))
+    for col, example in zip(example_cols, examples):
+        if col.button(example, use_container_width=True):
+            st.session_state[AGENT_QUESTION_KEY] = example
+
+    with st.form("agent_form", clear_on_submit=False):
+        question = st.text_input(
+            "Ask a question",
+            key=AGENT_QUESTION_KEY,
+            placeholder="Try: recommend a rock album from the 1970s",
+        )
+        submitted = st.form_submit_button("Ask agent", use_container_width=True)
+
+    if submitted and question.strip():
+        try:
+            if use_openai:
+                answer = answer_question_with_openai(
+                    question,
+                    selected,
+                    selected_genres,
+                    api_key=str(api_key),
+                    model=str(model),
+                )
+            else:
+                answer = answer_question(question, selected, selected_genres)
+        except Exception as exc:
+            fallback = answer_question(question, selected, selected_genres)
+            answer = fallback.__class__(
+                question=fallback.question,
+                summary=f"{fallback.summary}\n\nOpenAI routing was unavailable, so this answer used the local skill router. Error: {exc}",
+                detail=fallback.detail,
+                skill=fallback.skill,
+                mode="deterministic fallback",
+            )
+        st.session_state[AGENT_HISTORY_KEY].insert(0, answer)
+        st.session_state[AGENT_HISTORY_KEY] = st.session_state[AGENT_HISTORY_KEY][:6]
+
+    if not st.session_state[AGENT_HISTORY_KEY]:
+        st.info(
+            "The agent can recommend albums, summarize genre patterns, compare you against consensus, "
+            "search notes, and produce capstone-ready insights."
+        )
+        return
+
+    for answer in st.session_state[AGENT_HISTORY_KEY]:
+        with st.container(border=True):
+            st.markdown(f"**You:** {escape(answer.question)}")
+            st.write(answer.summary)
+            st.caption(f"Skill used: {answer.skill} | Mode: {answer.mode}")
+            if not answer.detail.empty:
+                compact_table(answer.detail, answer.detail.columns.tolist(), height=260)
 
 
 def render_soundprint(selected: pd.DataFrame, selected_genres: pd.DataFrame) -> None:
@@ -561,8 +648,8 @@ def main() -> None:
 
     render_rating_key(selected["RatingStatus"])
 
-    tab_overview, tab_soundprint, tab_taste, tab_gaps, tab_explorer = st.tabs(
-        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer"]
+    tab_overview, tab_soundprint, tab_taste, tab_gaps, tab_explorer, tab_agent = st.tabs(
+        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer", "Agent"]
     )
 
     with tab_overview:
@@ -832,6 +919,9 @@ def main() -> None:
 
         with st.expander("Full table"):
             compact_table(table_df, explorer_cols, height=640)
+
+    with tab_agent:
+        render_agent(selected, selected_genres)
 
 
 if __name__ == "__main__":
