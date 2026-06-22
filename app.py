@@ -266,11 +266,32 @@ def render_album_detail(album: pd.Series) -> None:
         st.write(notes)
 
 
-def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame) -> None:
+def render_agent_scope(
+    selected: pd.DataFrame,
+    selected_genres: pd.DataFrame,
+    active_filters: list[str],
+) -> None:
+    rated = selected["RatingNum"].dropna()
+    scope_cols = st.columns(4)
+    scope_cols[0].metric("Scope Albums", f"{len(selected):,}")
+    scope_cols[1].metric("Rated", f"{rated.count():,}")
+    scope_cols[2].metric("Avg Rating", f"{rated.mean():.2f}" if not rated.empty else "-")
+    scope_cols[3].metric("Genres", f"{selected_genres['Genre'].nunique():,}")
+
+    st.markdown("**Current scope**")
+    if active_filters:
+        chips = " ".join(f"<span class='filter-chip'>{escape(label)}</span>" for label in active_filters)
+        st.markdown(f"<div class='filter-strip'>{chips}</div>", unsafe_allow_html=True)
+    else:
+        st.caption("All albums are included.")
+
+
+def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_filters: list[str]) -> None:
     st.subheader("Album Agent")
     st.caption("Ask about the currently filtered albums. The agent chooses a data skill, runs it, and explains the result.")
 
     st.session_state.setdefault(AGENT_HISTORY_KEY, [])
+    render_agent_scope(selected, selected_genres, active_filters)
 
     api_key = os.getenv("OPENAI_API_KEY") or optional_secret("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL") or optional_secret("OPENAI_MODEL", "gpt-5.5")
@@ -921,7 +942,7 @@ def main() -> None:
             compact_table(table_df, explorer_cols, height=640)
 
     with tab_agent:
-        render_agent(selected, selected_genres)
+        render_agent(selected, selected_genres, active_filters)
 
 
 if __name__ == "__main__":
