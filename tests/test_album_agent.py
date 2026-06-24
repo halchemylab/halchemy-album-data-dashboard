@@ -41,9 +41,31 @@ def sample_data(tmp_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
                 Notes="The beats are enjoyable and groovy.",
                 **{"Global Rating": 3.62},
             ),
+            valid_row(
+                Artist="The Rolling Stones",
+                Album="Sticky Fingers",
+                Released=1971,
+                Rating="4",
+                Genres="rock",
+                Notes="Loose and confident rock record.",
+                **{"Global Rating": 3.76},
+            ),
         ]
     ).to_csv(csv_path, index=False)
     return load_data(csv_path)
+
+
+def answer_context(answer):
+    clean = answer.detail.head(8).copy()
+    clean = clean.where(pd.notna(clean), None)
+    rows = clean.to_dict(orient="records")
+    return {
+        "last_question": answer.question,
+        "last_skill": answer.skill,
+        "last_summary": answer.summary,
+        "last_rows": rows,
+        "selected_album": rows[0] if rows else None,
+    }
 
 
 def test_choose_skill_routes_common_questions() -> None:
@@ -63,6 +85,40 @@ def test_answer_question_recommends_with_context(tmp_path: Path) -> None:
     assert answer.skill == "recommendations"
     assert "Beatles - A Hard Day's Night" in answer.summary
     assert answer.detail["Album"].tolist()[0] == "A Hard Day's Night"
+
+
+def test_followup_can_explain_second_result(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+    first = answer_question("Recommend rock albums", df, exploded)
+
+    answer = answer_question("Why the second one?", df, exploded, context=answer_context(first))
+
+    assert answer.skill == "context_followup"
+    assert "Sticky Fingers" in answer.summary
+    assert answer.detail["Album"].tolist() == ["Sticky Fingers"]
+
+
+def test_followup_finds_similar_albums(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+    first = answer_question("Recommend a rock album", df, exploded)
+
+    answer = answer_question("Show more like this", df, exploded, context=answer_context(first))
+
+    assert answer.skill == "context_followup"
+    assert "Using Beatles - A Hard Day's Night" in answer.summary
+    assert "A Hard Day's Night" not in answer.detail["Album"].tolist()
+    assert "Sticky Fingers" in answer.detail["Album"].tolist()
+
+
+def test_followup_compares_against_overall_taste(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+    first = answer_question("Recommend a rock album", df, exploded)
+
+    answer = answer_question("Compare against my overall taste", df, exploded, context=answer_context(first))
+
+    assert answer.skill == "context_followup"
+    assert "current average personal rating" in answer.summary
+    assert {"Metric", "Value", "Catalog Average"}.issubset(answer.detail.columns)
 
 
 def test_answer_question_finds_note_matches(tmp_path: Path) -> None:

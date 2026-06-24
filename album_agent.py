@@ -4,7 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -19,6 +19,7 @@ class AgentAnswer:
 
 
 SkillHandler = Callable[[str, pd.DataFrame, pd.DataFrame], AgentAnswer]
+AgentContext = dict[str, Any]
 
 
 def _empty_detail() -> pd.DataFrame:
@@ -44,6 +45,212 @@ def _records_frame(records: list[dict[str, object]]) -> pd.DataFrame:
 
 def _format_album(row: pd.Series) -> str:
     return f"{row['Artist']} - {row['Album']} ({int(row['Released'])})"
+
+
+def _format_context_album(album: dict[str, object]) -> str:
+    released = album.get("Released", "-")
+    return f"{album.get('Artist', '-')} - {album.get('Album', '-')} ({released})"
+
+
+def _row_identity(row: pd.Series | dict[str, object]) -> tuple[str, str, int | None]:
+    get = row.get if isinstance(row, dict) else row.__getitem__
+    try:
+        released = int(get("Released"))
+    except (TypeError, ValueError):
+        released = None
+    return str(get("Artist")), str(get("Album")), released
+
+
+def _context_rows(context: AgentContext | None) -> list[dict[str, object]]:
+    if not context:
+        return []
+    rows = context.get("last_rows", [])
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _context_album(question: str, context: AgentContext | None) -> dict[str, object] | None:
+    rows = _context_rows(context)
+    lowered = question.lower()
+    ordinal_indexes = {
+        "first": 0,
+        "1st": 0,
+        "top": 0,
+        "second": 1,
+        "2nd": 1,
+        "third": 2,
+        "3rd": 2,
+        "fourth": 3,
+        "4th": 3,
+        "fifth": 4,
+        "5th": 4,
+    }
+    for word, index in ordinal_indexes.items():
+        if re.search(rf"\b{re.escape(word)}\b", lowered) and index < len(rows):
+            return rows[index]
+    selected = context.get("selected_album") if context else None
+    if isinstance(selected, dict):
+        return selected
+    if rows and any(phrase in lowered for phrase in ["this", "that", "it", "why", "similar", "more like"]):
+        return rows[0]
+    return None
+
+
+def _genre_tokens(value: object) -> set[str]:
+    return {genre.strip().casefold() for genre in str(value or "").split(",") if genre.strip()}
+
+
+def _matching_album(df: pd.DataFrame, album: dict[str, object]) -> pd.Series | None:
+    artist, title, released = _row_identity(album)
+    mask = df["Artist"].astype(str).eq(artist) & df["Album"].astype(str).eq(title)
+    if released is not None:
+        mask &= df["Released"].eq(released)
+    matches = df.loc[mask]
+    if matches.empty:
+        return None
+    return matches.iloc[0]
+
+
+def _similar_album_answer(question: str, df: pd.DataFrame, album: dict[str, object]) -> AgentAnswer:
+    source = _matching_album(df, album)
+    if source is None:
+        return AgentAnswer(
+            question=question,
+            summary=f"I could not find {_format_context_album(album)} in the current filtered data.",
+            detail=_empty_detail(),
+            skill="context_followup",
+        )
+
+    source_genres = _genre_tokens(source.get("Genres"))
+    source_decade = str(source.get("Decade", ""))
+    data = df.copy()
+    same_album = (
+        data["Artist"].astype(str).eq(str(source["Artist"]))
+        & data["Album"].astype(str).eq(str(source["Album"]))
+        & data["Released"].eq(source["Released"])
+    )
+    data = data.loc[~same_album]
+
+    if "unrated" in question.lower() or "not rated" in question.lower():
+        data = data.loc[data["RatingStatus"].eq("unrated")]
+    else:
+        data = data.dropna(subset=["RatingNum"])
+
+    if source_genres:
+        genre_match = data["Genres"].fillna("").apply(lambda value: bool(_genre_tokens(value) & source_genres))
+        data = data.loc[genre_match]
+    if data.empty and source_decade:
+        data = df.loc[df["Decade"].eq(source_decade) & ~same_album].copy()
+
+    if data.empty:
+        return AgentAnswer(
+            question=question,
+            summary=f"I could not find another album like {_format_album(source)} in the current filtered data.",
+            detail=_empty_detail(),
+            skill="context_followup",
+        )
+
+    sort_columns = ["RatingNum", "Global Rating", "RatingDelta"]
+    data = data.sort_values(sort_columns, ascending=[False, False, False], na_position="last")
+    genre_text = ", ".join(sorted(source_genres)) if source_genres else source_decade
+    summary = f"Using {_format_album(source)} as context, these are the closest matches by genre signal"
+    if genre_text:
+        summary += f" ({genre_text})"
+    summary += "."
+    return AgentAnswer(
+        question=question,
+        summary=summary,
+        detail=_top_table(data, ["Artist", "Album", "Released", "RatingNum", "Global Rating", "RatingDelta", "Genres"]),
+        skill="context_followup",
+    )
+
+
+def _explain_album_answer(question: str, df: pd.DataFrame, album: dict[str, object]) -> AgentAnswer:
+    source = _matching_album(df, album)
+    if source is None:
+        return AgentAnswer(
+            question=question,
+            summary=f"I could not find {_format_context_album(album)} in the current filtered data.",
+            detail=_empty_detail(),
+            skill="context_followup",
+        )
+
+    parts = [
+        f"{_format_album(source)} is in context.",
+        f"Your rating is {source['RatingNum']:.1f}." if pd.notna(source.get("RatingNum")) else "It is not personally rated yet.",
+        f"The global rating is {source['Global Rating']:.2f}." if pd.notna(source.get("Global Rating")) else "It has no global rating in the data.",
+    ]
+    if pd.notna(source.get("RatingDelta")):
+        parts.append(f"That puts your taste gap at {source['RatingDelta']:+.2f}.")
+    if str(source.get("Genres", "")).strip():
+        parts.append(f"Genres: {source['Genres']}.")
+    if str(source.get("Notes", "")).strip():
+        parts.append(f"Your notes say: {source['Notes']}")
+    return AgentAnswer(
+        question=question,
+        summary=" ".join(parts),
+        detail=_records_frame([source.where(pd.notna(source), None).to_dict()]),
+        skill="context_followup",
+    )
+
+
+def _compare_album_answer(question: str, df: pd.DataFrame, album: dict[str, object]) -> AgentAnswer | None:
+    source = _matching_album(df, album)
+    rated = df.dropna(subset=["RatingNum"]).copy()
+    if source is None or rated.empty:
+        return None
+
+    avg_rating = rated["RatingNum"].mean()
+    avg_global = df["Global Rating"].mean()
+    avg_gap = df["RatingDelta"].mean()
+    rows = [
+        {
+            "Metric": "Selected album",
+            "Value": _format_album(source),
+            "Catalog Average": "-",
+        },
+        {
+            "Metric": "Personal rating",
+            "Value": f"{source['RatingNum']:.2f}" if pd.notna(source.get("RatingNum")) else "-",
+            "Catalog Average": f"{avg_rating:.2f}",
+        },
+        {
+            "Metric": "Global rating",
+            "Value": f"{source['Global Rating']:.2f}" if pd.notna(source.get("Global Rating")) else "-",
+            "Catalog Average": f"{avg_global:.2f}" if pd.notna(avg_global) else "-",
+        },
+        {
+            "Metric": "Taste gap",
+            "Value": f"{source['RatingDelta']:+.2f}" if pd.notna(source.get("RatingDelta")) else "-",
+            "Catalog Average": f"{avg_gap:+.2f}" if pd.notna(avg_gap) else "-",
+        },
+    ]
+    if pd.notna(source.get("RatingNum")):
+        relation = "above" if source["RatingNum"] > avg_rating else "below" if source["RatingNum"] < avg_rating else "right at"
+        summary = f"{_format_album(source)} sits {relation} your current average personal rating of {avg_rating:.2f}."
+    else:
+        summary = f"{_format_album(source)} is not personally rated yet, so only consensus and catalog context are available."
+    return AgentAnswer(
+        question=question,
+        summary=summary,
+        detail=_records_frame(rows),
+        skill="context_followup",
+    )
+
+
+def answer_context_followup(question: str, df: pd.DataFrame, context: AgentContext | None) -> AgentAnswer | None:
+    album = _context_album(question, context)
+    if album is None:
+        return None
+    lowered = question.lower()
+    if any(phrase in lowered for phrase in ["compare", "overall taste", "usual taste", "average"]):
+        return _compare_album_answer(question, df, album)
+    if any(phrase in lowered for phrase in ["more like", "similar", "another", "else", "only unrated", "unrated"]):
+        return _similar_album_answer(question, df, album)
+    if any(phrase in lowered for phrase in ["why", "explain", "context", "that one", "this one"]):
+        return _explain_album_answer(question, df, album)
+    return None
 
 
 def _extract_artist(question: str, df: pd.DataFrame) -> str | None:
@@ -484,7 +691,12 @@ def run_skill(
     return SKILLS.get(skill_name, catalog_overview)(question, df, exploded)
 
 
-def answer_question(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:
+def answer_question(
+    question: str,
+    df: pd.DataFrame,
+    exploded: pd.DataFrame,
+    context: AgentContext | None = None,
+) -> AgentAnswer:
     cleaned = question.strip()
     if not cleaned:
         return AgentAnswer(
@@ -493,8 +705,29 @@ def answer_question(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> 
             detail=_empty_detail(),
             skill="help",
         )
+    followup = answer_context_followup(cleaned, df, context)
+    if followup is not None:
+        return followup
     skill_name = choose_skill(cleaned)
     return SKILLS[skill_name](cleaned, df, exploded)
+
+
+def context_summary(context: AgentContext | None) -> str:
+    if not context:
+        return "No previous agent context is active."
+    lines = [
+        f"Previous question: {context.get('last_question', '-')}",
+        f"Previous skill: {context.get('last_skill', '-')}",
+        f"Previous summary: {context.get('last_summary', '-')}",
+    ]
+    selected = context.get("selected_album")
+    if isinstance(selected, dict):
+        lines.append(f"Selected album from previous result: {_format_context_album(selected)}")
+    rows = _context_rows(context)[:5]
+    if rows:
+        row_text = "; ".join(f"{index + 1}. {_format_context_album(row)}" for index, row in enumerate(rows))
+        lines.append(f"Previous result rows: {row_text}")
+    return "\n".join(lines)
 
 
 def _get_response_text(response: object) -> str:
@@ -526,14 +759,15 @@ def answer_question_with_openai(
     *,
     api_key: str | None = None,
     model: str | None = None,
+    context: AgentContext | None = None,
 ) -> AgentAnswer:
     cleaned = question.strip()
     if not cleaned:
-        return answer_question(question, df, exploded)
+        return answer_question(question, df, exploded, context=context)
 
     resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not resolved_api_key:
-        fallback = answer_question(question, df, exploded)
+        fallback = answer_question(question, df, exploded, context=context)
         return AgentAnswer(
             question=fallback.question,
             summary=fallback.summary,
@@ -560,10 +794,13 @@ def answer_question_with_openai(
             "content": (
                 "You are a skill-based album analytics agent inside a Streamlit dashboard. "
                 "Use the provided tools for factual answers. Do not invent albums, ratings, genres, or notes. "
+                "When the user asks a follow-up, use the previous context to resolve phrases like this, that, "
+                "the second one, more like this, or why. "
                 "Keep answers concise and cite the skill result in plain language."
             ),
         },
         {"role": "user", "content": selected_summary},
+        {"role": "user", "content": "Previous agent context:\n" + context_summary(context)},
         {"role": "user", "content": cleaned},
     ]
 
@@ -577,7 +814,7 @@ def answer_question_with_openai(
     calls = _function_calls(response)
     if not calls:
         text = _get_response_text(response)
-        fallback = answer_question(cleaned, df, exploded)
+        fallback = answer_question(cleaned, df, exploded, context=context)
         return AgentAnswer(
             question=cleaned,
             summary=text or fallback.summary,
@@ -615,7 +852,7 @@ def answer_question_with_openai(
     )
     final_text = _get_response_text(final_response)
     if last_answer is None:
-        last_answer = answer_question(cleaned, df, exploded)
+        last_answer = answer_question(cleaned, df, exploded, context=context)
     return AgentAnswer(
         question=cleaned,
         summary=final_text or last_answer.summary,

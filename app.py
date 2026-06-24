@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from album_agent import answer_question, answer_question_with_openai
+from album_agent import AgentAnswer, answer_question, answer_question_with_openai
 from album_data import AlbumDataError, RATING_LABEL_MAP, RATING_ORDER, load_data, notes_keywords
 
 
@@ -33,6 +33,8 @@ FILTER_YEAR_RANGE_KEY = "filter_year_range"
 EXPLORER_ALBUM_KEY = "explorer_album_key"
 AGENT_QUESTION_KEY = "agent_question"
 AGENT_HISTORY_KEY = "agent_history"
+AGENT_CONTEXT_KEY = "agent_context"
+AGENT_PIN_CONTEXT_KEY = "agent_pin_context"
 
 
 st.set_page_config(
@@ -286,12 +288,69 @@ def render_agent_scope(
         st.caption("All albums are included.")
 
 
+def make_agent_context(answer: AgentAnswer) -> dict[str, object]:
+    rows = []
+    if not answer.detail.empty:
+        clean = answer.detail.head(8).copy()
+        clean = clean.where(pd.notna(clean), None)
+        rows = clean.to_dict(orient="records")
+    selected_album = rows[0] if rows else None
+    return {
+        "last_question": answer.question,
+        "last_skill": answer.skill,
+        "last_summary": answer.summary,
+        "last_rows": rows,
+        "selected_album": selected_album,
+    }
+
+
+def render_agent_context_controls() -> None:
+    context = st.session_state.get(AGENT_CONTEXT_KEY)
+    left, right = st.columns([0.76, 0.24], vertical_alignment="center")
+    with left:
+        st.markdown("**Follow-up Context**")
+        if context:
+            selected = context.get("selected_album") if isinstance(context, dict) else None
+            if isinstance(selected, dict) and selected.get("Artist") and selected.get("Album"):
+                label = f"{selected.get('Artist')} - {selected.get('Album')} ({selected.get('Released', '-')})"
+                st.markdown(f"<span class='filter-chip'>Using: {escape(label)}</span>", unsafe_allow_html=True)
+            else:
+                st.caption("Using the previous agent result.")
+        else:
+            st.caption("Ask a question to start a follow-up thread.")
+    with right:
+        st.toggle("Pin context", key=AGENT_PIN_CONTEXT_KEY, disabled=not bool(context))
+        if st.button("Clear context", disabled=not bool(context), use_container_width=True):
+            st.session_state[AGENT_CONTEXT_KEY] = None
+            st.session_state[AGENT_PIN_CONTEXT_KEY] = False
+            st.rerun()
+
+
+def render_followup_buttons() -> None:
+    if not st.session_state.get(AGENT_CONTEXT_KEY):
+        return
+    followups = [
+        "Show more like this",
+        "Why this?",
+        "Only unrated albums",
+        "Compare against my overall taste",
+    ]
+    st.markdown("**Suggested follow-ups**")
+    cols = st.columns(len(followups))
+    for col, followup in zip(cols, followups):
+        if col.button(followup, use_container_width=True):
+            st.session_state[AGENT_QUESTION_KEY] = followup
+
+
 def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_filters: list[str]) -> None:
     st.subheader("Album Agent")
     st.caption("Ask about the currently filtered albums. The agent chooses a data skill, runs it, and explains the result.")
 
     st.session_state.setdefault(AGENT_HISTORY_KEY, [])
+    st.session_state.setdefault(AGENT_CONTEXT_KEY, None)
+    st.session_state.setdefault(AGENT_PIN_CONTEXT_KEY, False)
     render_agent_scope(selected, selected_genres, active_filters)
+    render_agent_context_controls()
 
     api_key = os.getenv("OPENAI_API_KEY") or optional_secret("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL") or optional_secret("OPENAI_MODEL", "gpt-5.5")
@@ -314,6 +373,7 @@ def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_f
     for col, example in zip(example_cols, examples):
         if col.button(example, use_container_width=True):
             st.session_state[AGENT_QUESTION_KEY] = example
+    render_followup_buttons()
 
     with st.form("agent_form", clear_on_submit=False):
         question = st.text_input(
@@ -332,11 +392,22 @@ def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_f
                     selected_genres,
                     api_key=str(api_key),
                     model=str(model),
+                    context=st.session_state.get(AGENT_CONTEXT_KEY),
                 )
             else:
-                answer = answer_question(question, selected, selected_genres)
+                answer = answer_question(
+                    question,
+                    selected,
+                    selected_genres,
+                    context=st.session_state.get(AGENT_CONTEXT_KEY),
+                )
         except Exception as exc:
-            fallback = answer_question(question, selected, selected_genres)
+            fallback = answer_question(
+                question,
+                selected,
+                selected_genres,
+                context=st.session_state.get(AGENT_CONTEXT_KEY),
+            )
             answer = fallback.__class__(
                 question=fallback.question,
                 summary=f"{fallback.summary}\n\nOpenAI routing was unavailable, so this answer used the local skill router. Error: {exc}",
@@ -346,6 +417,8 @@ def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_f
             )
         st.session_state[AGENT_HISTORY_KEY].insert(0, answer)
         st.session_state[AGENT_HISTORY_KEY] = st.session_state[AGENT_HISTORY_KEY][:6]
+        if not st.session_state.get(AGENT_PIN_CONTEXT_KEY):
+            st.session_state[AGENT_CONTEXT_KEY] = make_agent_context(answer)
 
     if not st.session_state[AGENT_HISTORY_KEY]:
         st.info(
