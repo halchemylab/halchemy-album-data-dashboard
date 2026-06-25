@@ -48,6 +48,8 @@ OPENAI_MODEL = "gpt-5.5"
 
 The secrets file is ignored by git.
 
+The Agent tab also keeps a local `agent_memory.json` file with durable taste signals derived from the full catalog: favorite genres, reliable artists, consensus gaps, note keywords, and unresolved albums. The file is regenerated when the catalog changes and is ignored by git.
+
 ## CSV schema
 
 `albums.csv` must include these columns:

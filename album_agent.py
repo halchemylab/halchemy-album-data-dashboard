@@ -27,6 +27,7 @@ class AgentAnswer:
 
 SkillHandler = Callable[[str, pd.DataFrame, pd.DataFrame], AgentAnswer]
 AgentContext = dict[str, Any]
+AgentMemory = dict[str, Any]
 
 
 def _empty_detail() -> pd.DataFrame:
@@ -730,6 +731,7 @@ def answer_question(
     df: pd.DataFrame,
     exploded: pd.DataFrame,
     context: AgentContext | None = None,
+    memory: AgentMemory | None = None,
 ) -> AgentAnswer:
     cleaned = question.strip()
     if not cleaned:
@@ -744,6 +746,7 @@ def answer_question(
         return _with_trace(
             followup,
             _scope_trace(df, exploded),
+            AgentTraceStep("Memory", "Loaded durable taste memory." if memory else "No durable taste memory was loaded."),
             AgentTraceStep("Plan", "Resolved the question as a follow-up using the active agent context."),
             AgentTraceStep("Tool", "Ran the context_followup skill against the filtered catalog."),
             _rows_trace(followup),
@@ -753,6 +756,7 @@ def answer_question(
     return _with_trace(
         answer,
         _scope_trace(df, exploded),
+        AgentTraceStep("Memory", "Loaded durable taste memory." if memory else "No durable taste memory was loaded."),
         AgentTraceStep("Plan", f"Classified the request as {skill_name}."),
         AgentTraceStep("Tool", f"Ran the {skill_name} skill with deterministic pandas analysis."),
         _rows_trace(answer),
@@ -774,6 +778,56 @@ def context_summary(context: AgentContext | None) -> str:
     if rows:
         row_text = "; ".join(f"{index + 1}. {_format_context_album(row)}" for index, row in enumerate(rows))
         lines.append(f"Previous result rows: {row_text}")
+    return "\n".join(lines)
+
+
+def memory_summary(memory: AgentMemory | None) -> str:
+    if not memory:
+        return "No durable taste memory is active."
+    catalog = memory.get("catalog", {})
+    lines = [
+        "Durable taste memory:",
+        (
+            f"{catalog.get('albums', 0):,} albums, {catalog.get('rated', 0):,} rated, "
+            f"{catalog.get('unrated', 0):,} unresolved, {catalog.get('genres', 0):,} genres."
+        ),
+    ]
+    favorite_genres = memory.get("favorite_genres", [])
+    if isinstance(favorite_genres, list) and favorite_genres:
+        labels = [
+            f"{item.get('Genre')} ({float(item.get('AvgRating', 0)):.2f})"
+            for item in favorite_genres[:3]
+            if isinstance(item, dict)
+        ]
+        if labels:
+            lines.append("Favorite genre signals: " + ", ".join(labels))
+    reliable_artists = memory.get("reliable_artists", [])
+    if isinstance(reliable_artists, list) and reliable_artists:
+        labels = [
+            f"{item.get('Artist')} ({float(item.get('AvgRating', 0)):.2f})"
+            for item in reliable_artists[:3]
+            if isinstance(item, dict)
+        ]
+        if labels:
+            lines.append("Reliable artists: " + ", ".join(labels))
+    above_consensus = memory.get("above_consensus", [])
+    if isinstance(above_consensus, list) and above_consensus:
+        labels = [
+            _format_context_album(item)
+            for item in above_consensus[:2]
+            if isinstance(item, dict)
+        ]
+        if labels:
+            lines.append("Recurring above-consensus examples: " + "; ".join(labels))
+    unresolved = memory.get("unresolved_queue", [])
+    if isinstance(unresolved, list) and unresolved:
+        labels = [
+            _format_context_album(item)
+            for item in unresolved[:3]
+            if isinstance(item, dict)
+        ]
+        if labels:
+            lines.append("Unresolved listening queue: " + "; ".join(labels))
     return "\n".join(lines)
 
 
@@ -807,14 +861,15 @@ def answer_question_with_openai(
     api_key: str | None = None,
     model: str | None = None,
     context: AgentContext | None = None,
+    memory: AgentMemory | None = None,
 ) -> AgentAnswer:
     cleaned = question.strip()
     if not cleaned:
-        return answer_question(question, df, exploded, context=context)
+        return answer_question(question, df, exploded, context=context, memory=memory)
 
     resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not resolved_api_key:
-        fallback = answer_question(question, df, exploded, context=context)
+        fallback = answer_question(question, df, exploded, context=context, memory=memory)
         return AgentAnswer(
             question=fallback.question,
             summary=fallback.summary,
@@ -852,6 +907,7 @@ def answer_question_with_openai(
         },
         {"role": "user", "content": selected_summary},
         {"role": "user", "content": "Previous agent context:\n" + context_summary(context)},
+        {"role": "user", "content": memory_summary(memory)},
         {"role": "user", "content": cleaned},
     ]
 
@@ -865,7 +921,7 @@ def answer_question_with_openai(
     calls = _function_calls(response)
     if not calls:
         text = _get_response_text(response)
-        fallback = answer_question(cleaned, df, exploded, context=context)
+        fallback = answer_question(cleaned, df, exploded, context=context, memory=memory)
         return AgentAnswer(
             question=cleaned,
             summary=text or fallback.summary,
@@ -910,7 +966,7 @@ def answer_question_with_openai(
     )
     final_text = _get_response_text(final_response)
     if last_answer is None:
-        last_answer = answer_question(cleaned, df, exploded, context=context)
+        last_answer = answer_question(cleaned, df, exploded, context=context, memory=memory)
     return AgentAnswer(
         question=cleaned,
         summary=final_text or last_answer.summary,

@@ -10,6 +10,7 @@ import streamlit as st
 
 from album_agent import AgentAnswer, answer_question, answer_question_with_openai
 from album_data import AlbumDataError, RATING_LABEL_MAP, RATING_ORDER, load_data, notes_keywords
+from album_memory import build_agent_memory, ensure_agent_memory, save_agent_memory
 
 
 DATA_PATH = Path(__file__).with_name("albums.csv")
@@ -351,14 +352,47 @@ def render_agent_trace(answer: AgentAnswer) -> None:
             st.caption(step.detail)
 
 
-def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_filters: list[str]) -> None:
+def render_agent_memory(memory: dict[str, object]) -> None:
+    catalog = memory.get("catalog", {}) if isinstance(memory.get("catalog"), dict) else {}
+    st.markdown("**Durable Taste Memory**")
+    st.caption(
+        f"{catalog.get('rated', 0):,} rated albums, "
+        f"{catalog.get('unrated', 0):,} unresolved albums, "
+        f"{catalog.get('genres', 0):,} genre signals."
+    )
+
+    with st.expander("Memory snapshot", expanded=False):
+        favorite_genres = memory.get("favorite_genres", [])
+        unresolved = memory.get("unresolved_queue", [])
+        if isinstance(favorite_genres, list) and favorite_genres:
+            st.markdown("**Favorite genre signals**")
+            st.dataframe(pd.DataFrame(favorite_genres), use_container_width=True, hide_index=True, height=190)
+        if isinstance(unresolved, list) and unresolved:
+            st.markdown("**Unresolved listening queue**")
+            st.dataframe(pd.DataFrame(unresolved), use_container_width=True, hide_index=True, height=220)
+
+
+def render_agent(
+    selected: pd.DataFrame,
+    selected_genres: pd.DataFrame,
+    active_filters: list[str],
+    full_catalog: pd.DataFrame,
+    full_genres: pd.DataFrame,
+) -> None:
     st.subheader("Album Agent")
     st.caption("Ask about the currently filtered albums. The agent chooses a data skill, runs it, and explains the result.")
 
+    memory = ensure_agent_memory(full_catalog, full_genres)
     st.session_state.setdefault(AGENT_HISTORY_KEY, [])
     st.session_state.setdefault(AGENT_CONTEXT_KEY, None)
     st.session_state.setdefault(AGENT_PIN_CONTEXT_KEY, False)
     render_agent_scope(selected, selected_genres, active_filters)
+    refresh_memory = st.button("Refresh durable memory", use_container_width=False)
+    if refresh_memory:
+        memory = build_agent_memory(full_catalog, full_genres)
+        save_agent_memory(memory)
+        st.rerun()
+    render_agent_memory(memory)
     render_agent_context_controls()
 
     api_key = os.getenv("OPENAI_API_KEY") or optional_secret("OPENAI_API_KEY")
@@ -402,6 +436,7 @@ def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_f
                     api_key=str(api_key),
                     model=str(model),
                     context=st.session_state.get(AGENT_CONTEXT_KEY),
+                    memory=memory,
                 )
             else:
                 answer = answer_question(
@@ -409,6 +444,7 @@ def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_f
                     selected,
                     selected_genres,
                     context=st.session_state.get(AGENT_CONTEXT_KEY),
+                    memory=memory,
                 )
         except Exception as exc:
             fallback = answer_question(
@@ -416,6 +452,7 @@ def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_f
                 selected,
                 selected_genres,
                 context=st.session_state.get(AGENT_CONTEXT_KEY),
+                memory=memory,
             )
             answer = fallback.__class__(
                 question=fallback.question,
@@ -1026,7 +1063,7 @@ def main() -> None:
             compact_table(table_df, explorer_cols, height=640)
 
     with tab_agent:
-        render_agent(selected, selected_genres, active_filters)
+        render_agent(selected, selected_genres, active_filters, df, exploded)
 
 
 if __name__ == "__main__":
