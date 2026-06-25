@@ -342,6 +342,15 @@ def render_followup_buttons() -> None:
             st.session_state[AGENT_QUESTION_KEY] = followup
 
 
+def render_agent_trace(answer: AgentAnswer) -> None:
+    if not answer.trace:
+        return
+    with st.expander("Agent plan and tool trace", expanded=False):
+        for index, step in enumerate(answer.trace, start=1):
+            st.markdown(f"**{index}. {escape(step.phase)}**")
+            st.caption(step.detail)
+
+
 def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_filters: list[str]) -> None:
     st.subheader("Album Agent")
     st.caption("Ask about the currently filtered albums. The agent chooses a data skill, runs it, and explains the result.")
@@ -414,6 +423,7 @@ def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_f
                 detail=fallback.detail,
                 skill=fallback.skill,
                 mode="deterministic fallback",
+                trace=fallback.trace,
             )
         st.session_state[AGENT_HISTORY_KEY].insert(0, answer)
         st.session_state[AGENT_HISTORY_KEY] = st.session_state[AGENT_HISTORY_KEY][:6]
@@ -432,6 +442,7 @@ def render_agent(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_f
             st.markdown(f"**You:** {escape(answer.question)}")
             st.write(answer.summary)
             st.caption(f"Skill used: {answer.skill} | Mode: {answer.mode}")
+            render_agent_trace(answer)
             if not answer.detail.empty:
                 compact_table(answer.detail, answer.detail.columns.tolist(), height=260)
 

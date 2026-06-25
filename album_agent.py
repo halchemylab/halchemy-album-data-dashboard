@@ -10,12 +10,19 @@ import pandas as pd
 
 
 @dataclass(frozen=True)
+class AgentTraceStep:
+    phase: str
+    detail: str
+
+
+@dataclass(frozen=True)
 class AgentAnswer:
     question: str
     summary: str
     detail: pd.DataFrame
     skill: str
     mode: str = "deterministic"
+    trace: tuple[AgentTraceStep, ...] = ()
 
 
 SkillHandler = Callable[[str, pd.DataFrame, pd.DataFrame], AgentAnswer]
@@ -24,6 +31,33 @@ AgentContext = dict[str, Any]
 
 def _empty_detail() -> pd.DataFrame:
     return pd.DataFrame()
+
+
+def _with_trace(answer: AgentAnswer, *steps: AgentTraceStep) -> AgentAnswer:
+    return AgentAnswer(
+        question=answer.question,
+        summary=answer.summary,
+        detail=answer.detail,
+        skill=answer.skill,
+        mode=answer.mode,
+        trace=(*steps, *answer.trace),
+    )
+
+
+def _scope_trace(df: pd.DataFrame, exploded: pd.DataFrame) -> AgentTraceStep:
+    rated = df["RatingNum"].notna().sum() if "RatingNum" in df.columns else 0
+    genres = exploded["Genre"].nunique() if "Genre" in exploded.columns else 0
+    return AgentTraceStep(
+        "Scope",
+        f"Inspected {len(df):,} albums, {rated:,} rated entries, and {genres:,} genres in the current filter.",
+    )
+
+
+def _rows_trace(answer: AgentAnswer) -> AgentTraceStep:
+    row_count = len(answer.detail)
+    if row_count:
+        return AgentTraceStep("Evidence", f"Returned {row_count:,} evidence rows for the UI table.")
+    return AgentTraceStep("Evidence", "No table rows were needed for this answer.")
 
 
 def _top_table(data: pd.DataFrame, columns: list[str], limit: int = 8) -> pd.DataFrame:
@@ -707,9 +741,22 @@ def answer_question(
         )
     followup = answer_context_followup(cleaned, df, context)
     if followup is not None:
-        return followup
+        return _with_trace(
+            followup,
+            _scope_trace(df, exploded),
+            AgentTraceStep("Plan", "Resolved the question as a follow-up using the active agent context."),
+            AgentTraceStep("Tool", "Ran the context_followup skill against the filtered catalog."),
+            _rows_trace(followup),
+        )
     skill_name = choose_skill(cleaned)
-    return SKILLS[skill_name](cleaned, df, exploded)
+    answer = SKILLS[skill_name](cleaned, df, exploded)
+    return _with_trace(
+        answer,
+        _scope_trace(df, exploded),
+        AgentTraceStep("Plan", f"Classified the request as {skill_name}."),
+        AgentTraceStep("Tool", f"Ran the {skill_name} skill with deterministic pandas analysis."),
+        _rows_trace(answer),
+    )
 
 
 def context_summary(context: AgentContext | None) -> str:
@@ -774,6 +821,10 @@ def answer_question_with_openai(
             detail=fallback.detail,
             skill=fallback.skill,
             mode="deterministic fallback",
+            trace=(
+                AgentTraceStep("Plan", "No OpenAI API key was configured, so the local router handled the request."),
+                *fallback.trace,
+            ),
         )
 
     try:
@@ -821,6 +872,12 @@ def answer_question_with_openai(
             detail=fallback.detail,
             skill=fallback.skill,
             mode="openai",
+            trace=(
+                _scope_trace(df, exploded),
+                AgentTraceStep("Plan", "Asked OpenAI to route the request, but it answered without a tool call."),
+                AgentTraceStep("Tool", f"Used the local {fallback.skill} skill for evidence rows."),
+                _rows_trace(fallback),
+            ),
         )
 
     for item in getattr(response, "output", []) or []:
@@ -837,6 +894,7 @@ def answer_question_with_openai(
             arguments = {}
         skill_name = str(getattr(call, "name", "catalog_overview"))
         last_answer = run_skill(skill_name, cleaned, df, exploded, arguments)
+        argument_text = ", ".join(f"{key}={value}" for key, value in arguments.items()) or "no arguments"
         input_items.append(
             {
                 "type": "function_call_output",
@@ -859,4 +917,11 @@ def answer_question_with_openai(
         detail=last_answer.detail,
         skill=last_answer.skill,
         mode="openai",
+        trace=(
+            _scope_trace(df, exploded),
+            AgentTraceStep("Plan", "Asked OpenAI to choose the best album-analysis tool."),
+            AgentTraceStep("Tool", f"OpenAI called {last_answer.skill} with {argument_text}."),
+            _rows_trace(last_answer),
+            AgentTraceStep("Explain", "Sent the tool result back to OpenAI for the final wording."),
+        ),
     )
