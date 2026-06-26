@@ -4,6 +4,8 @@ A Streamlit dashboard for exploring `albums.csv`: ratings, genres, eras, notes, 
 
 The dashboard also includes an **Album Agent** tab. It is a skill-based data agent: the chat interface sends questions to an agent layer, the agent chooses an album-analysis skill, the skill runs deterministic pandas analysis over the currently filtered data, and the answer is summarized back in the UI.
 
+Agentic features include natural-language recommendations, genre and taste-gap analysis, notes search, durable taste memory, follow-up context, one-page taste reports, slide-style story insights, and guided dashboard walkthroughs that can apply filters for you.
+
 ## Run
 
 ```powershell
