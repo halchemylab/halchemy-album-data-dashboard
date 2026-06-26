@@ -693,7 +693,125 @@ def notes_search(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> Age
     )
 
 
+def _album_label_or_dash(data: pd.DataFrame) -> str:
+    if data.empty:
+        return "-"
+    return _format_album(data.iloc[0])
+
+
+def _top_genre_summary(exploded: pd.DataFrame) -> tuple[str, str]:
+    rated_genres = exploded.dropna(subset=["RatingNum"]).copy()
+    if rated_genres.empty:
+        return "-", "No rated genre signal yet"
+    genre_summary = (
+        rated_genres.groupby("Genre", as_index=False)
+        .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"), AvgGlobal=("Global Rating", "mean"))
+        .sort_values(["AvgRating", "Albums"], ascending=[False, False])
+    )
+    top = genre_summary.iloc[0]
+    return str(top["Genre"]), f"{top['Albums']:.0f} albums, {top['AvgRating']:.2f} avg rating"
+
+
+def taste_report(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:
+    rated = df.dropna(subset=["RatingNum"]).copy()
+    gap = df.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
+    unresolved = df.loc[df["RatingStatus"].eq("unrated")].sort_values(
+        ["Global Rating", "Released"],
+        ascending=[False, False],
+        na_position="last",
+    )
+
+    if rated.empty:
+        return AgentAnswer(
+            question=question,
+            summary="I need rated albums before I can build a useful taste report.",
+            detail=_empty_detail(),
+            skill="story_insights",
+        )
+
+    best = rated.sort_values(["RatingNum", "Global Rating"], ascending=[False, False]).head(1)
+    lowest = rated.sort_values(["RatingNum", "Global Rating"], ascending=[True, False]).head(1)
+    top_genre, top_genre_metric = _top_genre_summary(exploded)
+    above = gap.sort_values("RatingDelta", ascending=False).head(1)
+    below = gap.sort_values("RatingDelta", ascending=True).head(1)
+    avg_rating = rated["RatingNum"].mean()
+    avg_global = rated["Global Rating"].mean()
+
+    rows = [
+        {
+            "Section": "Taste identity",
+            "Narrative": f"You lean toward albums that earn a {avg_rating:.2f} average personal rating in this slice.",
+            "Evidence": _album_label_or_dash(best),
+            "Metric": f"{len(rated):,} rated albums",
+        },
+        {
+            "Section": "Strongest genre",
+            "Narrative": f"{top_genre} is the clearest repeated genre signal.",
+            "Evidence": top_genre,
+            "Metric": top_genre_metric,
+        },
+        {
+            "Section": "Signature favorite",
+            "Narrative": "This is the strongest anchor for describing what works for you.",
+            "Evidence": _album_label_or_dash(best),
+            "Metric": f"{best.iloc[0]['RatingNum']:.1f} personal rating" if not best.empty else "-",
+        },
+        {
+            "Section": "Resistance point",
+            "Narrative": "This is useful contrast for explaining what does not connect.",
+            "Evidence": _album_label_or_dash(lowest),
+            "Metric": f"{lowest.iloc[0]['RatingNum']:.1f} personal rating" if not lowest.empty else "-",
+        },
+    ]
+    if not above.empty:
+        rows.append(
+            {
+                "Section": "Above consensus",
+                "Narrative": "This is where your taste is more enthusiastic than the global signal.",
+                "Evidence": _album_label_or_dash(above),
+                "Metric": f"{above.iloc[0]['RatingDelta']:+.2f} gap",
+            }
+        )
+    if not below.empty:
+        rows.append(
+            {
+                "Section": "Below consensus",
+                "Narrative": "This is where the broader audience is warmer than you are.",
+                "Evidence": _album_label_or_dash(below),
+                "Metric": f"{below.iloc[0]['RatingDelta']:+.2f} gap",
+            }
+        )
+    if not unresolved.empty:
+        rows.append(
+            {
+                "Section": "Next listening question",
+                "Narrative": "This unresolved album can test whether the current pattern holds.",
+                "Evidence": _album_label_or_dash(unresolved),
+                "Metric": (
+                    f"{unresolved.iloc[0]['Global Rating']:.2f} global rating"
+                    if pd.notna(unresolved.iloc[0].get("Global Rating"))
+                    else "unrated by you"
+                ),
+            }
+        )
+
+    report_type = "slide outline" if any(word in question.lower() for word in ["slide", "deck"]) else "taste report"
+    summary = (
+        f"I built a {report_type} with {len(rows):,} sections from {len(rated):,} rated albums. "
+        f"Your current average personal rating is {avg_rating:.2f}"
+    )
+    if pd.notna(avg_global):
+        summary += f" against a {avg_global:.2f} average global rating."
+    else:
+        summary += "."
+    return AgentAnswer(question=question, summary=summary, detail=_records_frame(rows), skill="story_insights")
+
+
 def story_insights(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:
+    lowered = question.lower()
+    if any(word in lowered for word in ["report", "profile", "slide", "deck", "one-page", "one page"]):
+        return taste_report(question, df, exploded)
+
     rated = df.dropna(subset=["RatingNum"]).copy()
     gap = df.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
     genre_answer = genre_analysis(question, df, exploded)
@@ -887,7 +1005,22 @@ def choose_skill(question: str) -> str:
         any(term in lowered for term in filter_terms) or re.search(r"\b(?:19|20)\d0s\b", lowered)
     ):
         return "set_dashboard_filters"
-    if any(word in lowered for word in ["insight", "story", "presentation", "summarize my taste", "takeaway"]):
+    if any(
+        word in lowered
+        for word in [
+            "insight",
+            "story",
+            "presentation",
+            "summarize my taste",
+            "takeaway",
+            "report",
+            "profile",
+            "slide",
+            "deck",
+            "one-page",
+            "one page",
+        ]
+    ):
         return "story_insights"
     if any(word in lowered for word in ["recommend", "suggest", "should i listen", "best", "favorite", "top"]):
         return "recommendations"

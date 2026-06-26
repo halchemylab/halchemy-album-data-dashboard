@@ -29,7 +29,7 @@ Supported skills:
 | `recommendations` | Album suggestions from the current filtered catalog |
 | `taste_gaps` | Where personal ratings diverge from global ratings |
 | `notes_search` | Searches freeform notes for words or phrases |
-| `story_insights` | Capstone-ready narrative insights backed by data |
+| `story_insights` | Capstone-ready narrative insights, one-page taste reports, listener profiles, and slide outlines backed by data |
 
 To enable OpenAI mode, set your key before running Streamlit:
 

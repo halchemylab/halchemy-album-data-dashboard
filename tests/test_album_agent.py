@@ -83,6 +83,7 @@ def test_choose_skill_routes_common_questions() -> None:
     assert choose_skill("What genres do I rate highest?") == "genre_analysis"
     assert choose_skill("Find notes that mention boring") == "notes_search"
     assert choose_skill("Give me three capstone-ready insights") == "story_insights"
+    assert choose_skill("Create a one-page report on my music taste") == "story_insights"
     assert choose_skill("Summarize this catalog") == "catalog_overview"
 
 
@@ -148,6 +149,18 @@ def test_answer_question_returns_story_insights(tmp_path: Path) -> None:
     assert answer.skill == "story_insights"
     assert "story-ready insights" in answer.summary
     assert "Insight" in answer.detail.columns
+
+
+def test_answer_question_builds_taste_report(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    answer = answer_question("Create a one-page report on my music taste", df, exploded)
+
+    assert answer.skill == "story_insights"
+    assert "taste report" in answer.summary
+    assert {"Section", "Narrative", "Evidence", "Metric"}.issubset(answer.detail.columns)
+    assert "Taste identity" in answer.detail["Section"].tolist()
+    assert "Next listening question" in answer.detail["Section"].tolist()
 
 
 def test_answer_question_can_request_dashboard_filter_action(tmp_path: Path) -> None:
