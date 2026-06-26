@@ -456,8 +456,8 @@ def render_agent(
     examples = [
         "What should I listen to next?",
         "What genres do I rate highest?",
-        "Where do I disagree with global ratings?",
-        "Give me three capstone-ready insights",
+        "Create a one-page taste report",
+        "Walk me through my 1970s rock taste",
     ]
     example_cols = st.columns(len(examples))
     for col, example in zip(example_cols, examples):

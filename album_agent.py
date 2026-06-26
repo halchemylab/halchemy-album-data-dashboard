@@ -475,6 +475,114 @@ def set_dashboard_filters(
     )
 
 
+def _data_for_filter_action(
+    df: pd.DataFrame,
+    exploded: pd.DataFrame,
+    filters: dict[str, object],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    data = df.copy()
+    search = str(filters.get("search", "") or "").strip().lower()
+    if search:
+        data = data.loc[data["SearchText"].fillna("").str.contains(re.escape(search), na=False)]
+
+    values = filters.get("origins", [])
+    if isinstance(values, list) and values:
+        data = data.loc[data["OriginLabel"].astype(str).isin([str(value) for value in values])]
+    values = filters.get("decades", [])
+    if isinstance(values, list) and values:
+        data = data.loc[data["Decade"].astype(str).isin([str(value) for value in values])]
+    values = filters.get("statuses", [])
+    if isinstance(values, list) and values:
+        data = data.loc[data["RatingStatus"].astype(str).isin([str(value) for value in values])]
+
+    year_range = filters.get("year_range")
+    if isinstance(year_range, list) and len(year_range) == 2:
+        start, end = sorted((int(year_range[0]), int(year_range[1])))
+        data = data.loc[data["Released"].between(start, end)]
+
+    values = filters.get("genres", [])
+    if isinstance(values, list) and values:
+        genre_keys = exploded.loc[
+            exploded["Genre"].astype(str).isin([str(value) for value in values]),
+            ["Artist", "Album", "Released"],
+        ].drop_duplicates()
+        data_key = pd.MultiIndex.from_frame(data[["Artist", "Album", "Released"]])
+        genre_key = pd.MultiIndex.from_frame(genre_keys)
+        data = data.loc[data_key.isin(genre_key)]
+
+    if data.empty:
+        return data.copy(), exploded.iloc[0:0].copy()
+    selected_keys = pd.MultiIndex.from_frame(data[["Artist", "Album", "Released"]])
+    exploded_keys = pd.MultiIndex.from_frame(exploded[["Artist", "Album", "Released"]])
+    return data.copy(), exploded.loc[exploded_keys.isin(selected_keys)].copy()
+
+
+def dashboard_walkthrough(
+    question: str,
+    df: pd.DataFrame,
+    exploded: pd.DataFrame,
+    arguments: dict[str, object] | None = None,
+) -> AgentAnswer:
+    filter_answer = set_dashboard_filters(question, df, exploded, arguments)
+    action = filter_answer.dashboard_action if filter_answer.dashboard_action else None
+    filters = action.get("filters", {}) if isinstance(action, dict) else {}
+    clear_existing = bool(action.get("clear_existing")) if isinstance(action, dict) else False
+    if isinstance(filters, dict) and filters:
+        selected, selected_genres = _data_for_filter_action(df, exploded, filters)
+        filter_labels = _filter_action_labels(filters)
+    else:
+        selected, selected_genres = df.copy(), exploded.copy()
+        filter_labels = []
+
+    rated = selected.dropna(subset=["RatingNum"]).copy()
+    gaps = selected.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
+    top_album = _album_label_or_dash(rated.sort_values(["RatingNum", "Global Rating"], ascending=[False, False]).head(1))
+    top_genre, top_genre_metric = _top_genre_summary(selected_genres)
+
+    rows = [
+        {
+            "Step": "1. Focus the dashboard",
+            "Dashboard move": "; ".join(filter_labels) if filter_labels else "Use the current filters",
+            "What to inspect": "Confirm the scope metrics before reading the charts.",
+            "Evidence": f"{len(selected):,} albums, {rated['RatingNum'].count():,} rated",
+        },
+        {
+            "Step": "2. Read the soundprint",
+            "Dashboard move": "Open Soundprint",
+            "What to inspect": "Start with the strongest repeated genre signal.",
+            "Evidence": f"{top_genre}: {top_genre_metric}",
+        },
+        {
+            "Step": "3. Check the anchor album",
+            "Dashboard move": "Open Explorer",
+            "What to inspect": "Use the top album as the narrative anchor for this slice.",
+            "Evidence": top_album,
+        },
+        {
+            "Step": "4. Inspect disagreement",
+            "Dashboard move": "Open Outliers",
+            "What to inspect": "Look for where your rating diverges most from global consensus.",
+            "Evidence": (
+                _album_label_or_dash(gaps.sort_values("RatingDelta", ascending=False).head(1))
+                if not gaps.empty
+                else "No consensus gaps available"
+            ),
+        },
+    ]
+    summary = (
+        f"I built a guided walkthrough for {len(selected):,} albums"
+        + (f" and applied filters: {'; '.join(filter_labels)}." if filter_labels else " using the current dashboard filters.")
+    )
+    dashboard_action = {"type": "set_filters", "clear_existing": clear_existing, "filters": filters} if filter_labels else None
+    return AgentAnswer(
+        question=question,
+        summary=summary,
+        detail=_records_frame(rows),
+        skill="dashboard_walkthrough",
+        dashboard_action=dashboard_action,
+    )
+
+
 def _filter_skill_data(
     df: pd.DataFrame,
     exploded: pd.DataFrame,
@@ -868,6 +976,7 @@ SKILLS: dict[str, SkillHandler] = {
     "genre_analysis": genre_analysis,
     "notes_search": notes_search,
     "story_insights": story_insights,
+    "dashboard_walkthrough": lambda question, df, exploded: dashboard_walkthrough(question, df, exploded),
     "set_dashboard_filters": lambda question, df, exploded: set_dashboard_filters(question, df, exploded),
 }
 
@@ -955,6 +1064,31 @@ AGENT_TOOLS = [
     },
     {
         "type": "function",
+        "name": "dashboard_walkthrough",
+        "description": "Guide the user through a dashboard slice by setting filters and returning a step-by-step analysis path.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "search": {"type": "string", "description": "Optional search text for artist, album, notes, or genres."},
+                "genres": {"type": "array", "items": {"type": "string"}, "description": "Genres to select."},
+                "origins": {"type": "array", "items": {"type": "string"}, "description": "Origin labels to select."},
+                "decades": {"type": "array", "items": {"type": "string"}, "description": "Decades such as 1970s."},
+                "statuses": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]},
+                    "description": "Personal rating statuses to select.",
+                },
+                "year_range": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Optional [start_year, end_year] release-year range.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "set_dashboard_filters",
         "description": "Change the dashboard filters when the user asks to show, filter, focus, narrow, reset, or clear the dashboard.",
         "parameters": {
@@ -983,6 +1117,8 @@ AGENT_TOOLS = [
 
 def choose_skill(question: str) -> str:
     lowered = question.lower()
+    if any(phrase in lowered for phrase in ["walk me through", "guide me through", "dashboard walkthrough", "guided tour"]):
+        return "dashboard_walkthrough"
     if any(phrase in lowered for phrase in ["clear filters", "reset filters", "reset dashboard", "show everything"]):
         return "set_dashboard_filters"
     filter_verbs = ["filter", "set filters", "show me", "only show", "focus on", "narrow to", "switch to"]
@@ -1041,6 +1177,8 @@ def run_skill(
     arguments: dict[str, object] | None = None,
 ) -> AgentAnswer:
     arguments = arguments or {}
+    if skill_name == "dashboard_walkthrough":
+        return dashboard_walkthrough(question, df, exploded, arguments)
     if skill_name == "set_dashboard_filters":
         return set_dashboard_filters(question, df, exploded, arguments)
     if skill_name == "recommendations":
@@ -1095,8 +1233,9 @@ def answer_question(
             _rows_trace(followup),
         )
     skill_name = choose_skill(cleaned)
-    skill_df = filter_df if skill_name == "set_dashboard_filters" and filter_df is not None else df
-    skill_exploded = filter_exploded if skill_name == "set_dashboard_filters" and filter_exploded is not None else exploded
+    uses_full_catalog = skill_name in {"dashboard_walkthrough", "set_dashboard_filters"}
+    skill_df = filter_df if uses_full_catalog and filter_df is not None else df
+    skill_exploded = filter_exploded if uses_full_catalog and filter_exploded is not None else exploded
     answer = SKILLS[skill_name](cleaned, skill_df, skill_exploded)
     return _with_trace(
         answer,
@@ -1322,8 +1461,9 @@ def answer_question_with_openai(
         except json.JSONDecodeError:
             arguments = {}
         skill_name = str(getattr(call, "name", "catalog_overview"))
-        skill_df = filter_df if skill_name == "set_dashboard_filters" and filter_df is not None else df
-        skill_exploded = filter_exploded if skill_name == "set_dashboard_filters" and filter_exploded is not None else exploded
+        uses_full_catalog = skill_name in {"dashboard_walkthrough", "set_dashboard_filters"}
+        skill_df = filter_df if uses_full_catalog and filter_df is not None else df
+        skill_exploded = filter_exploded if uses_full_catalog and filter_exploded is not None else exploded
         last_answer = run_skill(skill_name, cleaned, skill_df, skill_exploded, arguments)
         argument_text = ", ".join(f"{key}={value}" for key, value in arguments.items()) or "no arguments"
         input_items.append(

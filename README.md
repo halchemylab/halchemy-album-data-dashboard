@@ -30,6 +30,7 @@ Supported skills:
 | `taste_gaps` | Where personal ratings diverge from global ratings |
 | `notes_search` | Searches freeform notes for words or phrases |
 | `story_insights` | Capstone-ready narrative insights, one-page taste reports, listener profiles, and slide outlines backed by data |
+| `dashboard_walkthrough` | Applies dashboard filters and gives a step-by-step analysis path through the relevant tabs |
 
 To enable OpenAI mode, set your key before running Streamlit:
 

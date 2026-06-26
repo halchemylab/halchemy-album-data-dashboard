@@ -84,6 +84,7 @@ def test_choose_skill_routes_common_questions() -> None:
     assert choose_skill("Find notes that mention boring") == "notes_search"
     assert choose_skill("Give me three capstone-ready insights") == "story_insights"
     assert choose_skill("Create a one-page report on my music taste") == "story_insights"
+    assert choose_skill("Walk me through my 1970s rock taste") == "dashboard_walkthrough"
     assert choose_skill("Summarize this catalog") == "catalog_overview"
 
 
@@ -194,6 +195,20 @@ def test_answer_question_can_request_filter_reset(tmp_path: Path) -> None:
 
     assert answer.skill == "set_dashboard_filters"
     assert answer.dashboard_action == {"type": "set_filters", "clear_existing": True, "filters": {}}
+
+
+def test_answer_question_builds_dashboard_walkthrough(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    answer = answer_question("Walk me through my 1970s rock taste", df, exploded)
+
+    assert answer.skill == "dashboard_walkthrough"
+    assert "guided walkthrough" in answer.summary
+    assert {"Step", "Dashboard move", "What to inspect", "Evidence"}.issubset(answer.detail.columns)
+    assert answer.dashboard_action is not None
+    filters = answer.dashboard_action["filters"]
+    assert filters["genres"] == ["rock"]
+    assert filters["decades"] == ["1970s"]
 
 
 def test_openai_agent_falls_back_without_api_key(tmp_path: Path, monkeypatch) -> None:
