@@ -352,6 +352,53 @@ def render_agent_trace(answer: AgentAnswer) -> None:
             st.caption(step.detail)
 
 
+def apply_agent_dashboard_action(answer: AgentAnswer, full_catalog: pd.DataFrame, full_genres: pd.DataFrame) -> bool:
+    action = answer.dashboard_action
+    if not isinstance(action, dict) or action.get("type") != "set_filters":
+        return False
+
+    year_min, year_max = int(full_catalog["Released"].min()), int(full_catalog["Released"].max())
+    filters = action.get("filters", {})
+    if not isinstance(filters, dict):
+        filters = {}
+
+    if action.get("clear_existing"):
+        reset_filter_state(year_min, year_max)
+
+    valid_genres = set(full_genres["Genre"].dropna().astype(str))
+    valid_origins = set(full_catalog["OriginLabel"].dropna().astype(str))
+    valid_decades = set(full_catalog["Decade"].dropna().astype(str))
+    valid_statuses = set(RATING_ORDER)
+
+    search = str(filters.get("search", "") or "").strip()
+    st.session_state[FILTER_SEARCH_KEY] = search
+    st.session_state[FILTER_GENRES_KEY] = [
+        str(value) for value in filters.get("genres", []) if str(value) in valid_genres
+    ]
+    st.session_state[FILTER_ORIGINS_KEY] = [
+        str(value) for value in filters.get("origins", []) if str(value) in valid_origins
+    ]
+    st.session_state[FILTER_DECADES_KEY] = [
+        str(value) for value in filters.get("decades", []) if str(value) in valid_decades
+    ]
+    st.session_state[FILTER_STATUSES_KEY] = [
+        str(value) for value in filters.get("statuses", []) if str(value) in valid_statuses
+    ]
+
+    year_range = filters.get("year_range")
+    if isinstance(year_range, list) and len(year_range) == 2:
+        try:
+            start, end = sorted((int(year_range[0]), int(year_range[1])))
+        except (TypeError, ValueError):
+            start, end = year_min, year_max
+        st.session_state[FILTER_YEAR_RANGE_KEY] = (
+            max(year_min, min(year_max, start)),
+            max(year_min, min(year_max, end)),
+        )
+
+    return True
+
+
 def render_agent_memory(memory: dict[str, object]) -> None:
     catalog = memory.get("catalog", {}) if isinstance(memory.get("catalog"), dict) else {}
     st.markdown("**Durable Taste Memory**")
@@ -437,6 +484,8 @@ def render_agent(
                     model=str(model),
                     context=st.session_state.get(AGENT_CONTEXT_KEY),
                     memory=memory,
+                    filter_df=full_catalog,
+                    filter_exploded=full_genres,
                 )
             else:
                 answer = answer_question(
@@ -445,6 +494,8 @@ def render_agent(
                     selected_genres,
                     context=st.session_state.get(AGENT_CONTEXT_KEY),
                     memory=memory,
+                    filter_df=full_catalog,
+                    filter_exploded=full_genres,
                 )
         except Exception as exc:
             fallback = answer_question(
@@ -453,6 +504,8 @@ def render_agent(
                 selected_genres,
                 context=st.session_state.get(AGENT_CONTEXT_KEY),
                 memory=memory,
+                filter_df=full_catalog,
+                filter_exploded=full_genres,
             )
             answer = fallback.__class__(
                 question=fallback.question,
@@ -461,11 +514,14 @@ def render_agent(
                 skill=fallback.skill,
                 mode="deterministic fallback",
                 trace=fallback.trace,
+                dashboard_action=fallback.dashboard_action,
             )
         st.session_state[AGENT_HISTORY_KEY].insert(0, answer)
         st.session_state[AGENT_HISTORY_KEY] = st.session_state[AGENT_HISTORY_KEY][:6]
         if not st.session_state.get(AGENT_PIN_CONTEXT_KEY):
             st.session_state[AGENT_CONTEXT_KEY] = make_agent_context(answer)
+        if apply_agent_dashboard_action(answer, full_catalog, full_genres):
+            st.rerun()
 
     if not st.session_state[AGENT_HISTORY_KEY]:
         st.info(

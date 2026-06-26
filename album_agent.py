@@ -23,6 +23,7 @@ class AgentAnswer:
     skill: str
     mode: str = "deterministic"
     trace: tuple[AgentTraceStep, ...] = ()
+    dashboard_action: dict[str, object] | None = None
 
 
 SkillHandler = Callable[[str, pd.DataFrame, pd.DataFrame], AgentAnswer]
@@ -42,6 +43,7 @@ def _with_trace(answer: AgentAnswer, *steps: AgentTraceStep) -> AgentAnswer:
         skill=answer.skill,
         mode=answer.mode,
         trace=(*steps, *answer.trace),
+        dashboard_action=answer.dashboard_action,
     )
 
 
@@ -315,6 +317,162 @@ def _extract_decade(question: str) -> str | None:
         year = int(year_match.group(1))
         return f"{year // 10 * 10}s"
     return None
+
+
+def _extract_decades(question: str, df: pd.DataFrame) -> list[str]:
+    valid_decades = sorted(str(value) for value in df["Decade"].dropna().unique()) if "Decade" in df.columns else []
+    found = {match.group(0) for match in re.finditer(r"\b(?:19|20)\d0s\b", question.lower())}
+    for match in re.finditer(r"\b((?:19|20)\d{2})\b", question):
+        year = int(match.group(1))
+        found.add(f"{year // 10 * 10}s")
+    return [decade for decade in valid_decades if decade.lower() in found]
+
+
+def _extract_filter_values(question: str, values: list[object]) -> list[str]:
+    lowered = question.lower()
+    matches: list[str] = []
+    for value in sorted({str(item) for item in values if str(item).strip()}, key=len, reverse=True):
+        if re.search(rf"(?<!\w){re.escape(value.lower())}(?!\w)", lowered):
+            matches.append(value)
+    return matches
+
+
+def _extract_statuses(question: str) -> list[str]:
+    lowered = question.lower()
+    status_aliases = {
+        "unrated": ["unrated", "not rated", "haven't rated", "have not rated", "no rating"],
+        "did-not-listen": ["did not listen", "didn't listen", "skipped"],
+        "1": ["1 star", "one star", "avoid"],
+        "2": ["2 star", "two star", "not for me"],
+        "3": ["3 star", "three star", "mixed"],
+        "4": ["4 star", "four star", "strong"],
+        "5": ["5 star", "five star", "essential"],
+    }
+    matches: list[str] = []
+    for status, aliases in status_aliases.items():
+        if any(alias in lowered for alias in aliases):
+            matches.append(status)
+    return matches
+
+
+def _extract_year_range(question: str, df: pd.DataFrame) -> tuple[int, int] | None:
+    if "Released" not in df.columns or df.empty:
+        return None
+    catalog_min, catalog_max = int(df["Released"].min()), int(df["Released"].max())
+    lowered = question.lower()
+    between = re.search(r"\bbetween\s+((?:19|20)\d{2})\s+and\s+((?:19|20)\d{2})\b", lowered)
+    if between:
+        start, end = sorted((int(between.group(1)), int(between.group(2))))
+        return max(catalog_min, start), min(catalog_max, end)
+    after = re.search(r"\b(?:after|since|from)\s+((?:19|20)\d{2})\b", lowered)
+    before = re.search(r"\b(?:before|through|until|to)\s+((?:19|20)\d{2})\b", lowered)
+    if after or before:
+        start = int(after.group(1)) if after else catalog_min
+        end = int(before.group(1)) if before else catalog_max
+        if start <= end:
+            return max(catalog_min, start), min(catalog_max, end)
+    return None
+
+
+def _extract_search_text(question: str, df: pd.DataFrame) -> str:
+    lowered = question.lower()
+    artists = _extract_filter_values(question, df["Artist"].dropna().unique().tolist() if "Artist" in df.columns else [])
+    albums = _extract_filter_values(question, df["Album"].dropna().unique().tolist() if "Album" in df.columns else [])
+    candidates = albums or artists
+    if candidates:
+        return candidates[0]
+    quoted = re.search(r"['\"]([^'\"]{2,})['\"]", question)
+    if quoted:
+        return quoted.group(1).strip()
+    search_match = re.search(r"\b(?:search|find)\s+(?:for\s+)?([a-z0-9][a-z0-9 '&.-]{1,40})", lowered)
+    if search_match:
+        value = search_match.group(1).strip()
+        value = re.sub(r"\b(?:albums?|records?|music|from|in|with|that|mention|mentions)\b.*$", "", value).strip()
+        return value
+    return ""
+
+
+def _filter_action_labels(filters: dict[str, object]) -> list[str]:
+    labels: list[str] = []
+    search = str(filters.get("search", "")).strip()
+    if search:
+        labels.append(f'Search "{search}"')
+    for key, label in [("genres", "Genres"), ("origins", "Origins"), ("decades", "Decades"), ("statuses", "Statuses")]:
+        values = filters.get(key, [])
+        if isinstance(values, list) and values:
+            labels.append(f"{label}: " + ", ".join(str(value) for value in values))
+    year_range = filters.get("year_range")
+    if isinstance(year_range, list) and len(year_range) == 2:
+        labels.append(f"Years: {year_range[0]}-{year_range[1]}")
+    return labels
+
+
+def set_dashboard_filters(
+    question: str,
+    df: pd.DataFrame,
+    exploded: pd.DataFrame,
+    arguments: dict[str, object] | None = None,
+) -> AgentAnswer:
+    arguments = arguments or {}
+    lowered = question.lower()
+    reset = any(phrase in lowered for phrase in ["clear filters", "reset filters", "reset dashboard", "show everything", "all albums"])
+    if reset:
+        action = {"type": "set_filters", "clear_existing": True, "filters": {}}
+        return AgentAnswer(
+            question=question,
+            summary="I cleared the dashboard filters.",
+            detail=_records_frame([{"Filter": "All filters", "Value": "cleared"}]),
+            skill="set_dashboard_filters",
+            dashboard_action=action,
+        )
+
+    valid_genres = sorted(exploded["Genre"].dropna().unique()) if "Genre" in exploded.columns else []
+    valid_origins = sorted(df["OriginLabel"].dropna().unique()) if "OriginLabel" in df.columns else []
+
+    filters: dict[str, object] = {
+        "search": str(arguments.get("search", "") or "").strip() or _extract_search_text(question, df),
+        "genres": arguments.get("genres") if isinstance(arguments.get("genres"), list) else _extract_filter_values(question, valid_genres),
+        "origins": arguments.get("origins") if isinstance(arguments.get("origins"), list) else _extract_filter_values(question, valid_origins),
+        "decades": arguments.get("decades") if isinstance(arguments.get("decades"), list) else _extract_decades(question, df),
+        "statuses": arguments.get("statuses") if isinstance(arguments.get("statuses"), list) else _extract_statuses(question),
+    }
+    year_range = arguments.get("year_range")
+    if isinstance(year_range, list) and len(year_range) == 2:
+        try:
+            filters["year_range"] = [int(year_range[0]), int(year_range[1])]
+        except (TypeError, ValueError):
+            filters["year_range"] = None
+    else:
+        extracted_range = _extract_year_range(question, df)
+        filters["year_range"] = list(extracted_range) if extracted_range else None
+
+    valid_genre_set = {str(value).casefold(): str(value) for value in valid_genres}
+    valid_origin_set = {str(value).casefold(): str(value) for value in valid_origins}
+    valid_decade_set = {str(value).casefold(): str(value) for value in df["Decade"].dropna().unique()} if "Decade" in df.columns else {}
+    valid_status_set = set(["1", "2", "3", "4", "5", "did-not-listen", "unrated"])
+    filters["genres"] = [valid_genre_set[str(value).casefold()] for value in filters["genres"] if str(value).casefold() in valid_genre_set]
+    filters["origins"] = [valid_origin_set[str(value).casefold()] for value in filters["origins"] if str(value).casefold() in valid_origin_set]
+    filters["decades"] = [valid_decade_set[str(value).casefold()] for value in filters["decades"] if str(value).casefold() in valid_decade_set]
+    filters["statuses"] = [str(value) for value in filters["statuses"] if str(value) in valid_status_set]
+
+    labels = _filter_action_labels(filters)
+    if not labels:
+        return AgentAnswer(
+            question=question,
+            summary="I could not identify a valid dashboard filter from that request.",
+            detail=_empty_detail(),
+            skill="set_dashboard_filters",
+        )
+
+    action = {"type": "set_filters", "clear_existing": True, "filters": filters}
+    rows = [{"Filter": label.split(":", 1)[0], "Value": label.split(":", 1)[-1].strip()} for label in labels]
+    return AgentAnswer(
+        question=question,
+        summary="I applied dashboard filters: " + "; ".join(labels) + ".",
+        detail=_records_frame(rows),
+        skill="set_dashboard_filters",
+        dashboard_action=action,
+    )
 
 
 def _filter_skill_data(
@@ -592,6 +750,7 @@ SKILLS: dict[str, SkillHandler] = {
     "genre_analysis": genre_analysis,
     "notes_search": notes_search,
     "story_insights": story_insights,
+    "set_dashboard_filters": lambda question, df, exploded: set_dashboard_filters(question, df, exploded),
 }
 
 
@@ -676,11 +835,58 @@ AGENT_TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "type": "function",
+        "name": "set_dashboard_filters",
+        "description": "Change the dashboard filters when the user asks to show, filter, focus, narrow, reset, or clear the dashboard.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "search": {"type": "string", "description": "Optional search text for artist, album, notes, or genres."},
+                "genres": {"type": "array", "items": {"type": "string"}, "description": "Genres to select."},
+                "origins": {"type": "array", "items": {"type": "string"}, "description": "Origin labels to select."},
+                "decades": {"type": "array", "items": {"type": "string"}, "description": "Decades such as 1970s."},
+                "statuses": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]},
+                    "description": "Personal rating statuses to select.",
+                },
+                "year_range": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Optional [start_year, end_year] release-year range.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
 def choose_skill(question: str) -> str:
     lowered = question.lower()
+    if any(phrase in lowered for phrase in ["clear filters", "reset filters", "reset dashboard", "show everything"]):
+        return "set_dashboard_filters"
+    filter_verbs = ["filter", "set filters", "show me", "only show", "focus on", "narrow to", "switch to"]
+    filter_terms = [
+        "unrated",
+        "not rated",
+        "did not listen",
+        "skipped",
+        "albums from",
+        "from the",
+        "in the",
+        "rock",
+        "pop",
+        "jazz",
+        "hip-hop",
+        "folk",
+        "soul",
+    ]
+    if any(verb in lowered for verb in filter_verbs) and (
+        any(term in lowered for term in filter_terms) or re.search(r"\b(?:19|20)\d0s\b", lowered)
+    ):
+        return "set_dashboard_filters"
     if any(word in lowered for word in ["insight", "story", "presentation", "summarize my taste", "takeaway"]):
         return "story_insights"
     if any(word in lowered for word in ["recommend", "suggest", "should i listen", "best", "favorite", "top"]):
@@ -702,6 +908,8 @@ def run_skill(
     arguments: dict[str, object] | None = None,
 ) -> AgentAnswer:
     arguments = arguments or {}
+    if skill_name == "set_dashboard_filters":
+        return set_dashboard_filters(question, df, exploded, arguments)
     if skill_name == "recommendations":
         selected, selected_genres = _filter_skill_data(
             df,
@@ -732,6 +940,8 @@ def answer_question(
     exploded: pd.DataFrame,
     context: AgentContext | None = None,
     memory: AgentMemory | None = None,
+    filter_df: pd.DataFrame | None = None,
+    filter_exploded: pd.DataFrame | None = None,
 ) -> AgentAnswer:
     cleaned = question.strip()
     if not cleaned:
@@ -752,7 +962,9 @@ def answer_question(
             _rows_trace(followup),
         )
     skill_name = choose_skill(cleaned)
-    answer = SKILLS[skill_name](cleaned, df, exploded)
+    skill_df = filter_df if skill_name == "set_dashboard_filters" and filter_df is not None else df
+    skill_exploded = filter_exploded if skill_name == "set_dashboard_filters" and filter_exploded is not None else exploded
+    answer = SKILLS[skill_name](cleaned, skill_df, skill_exploded)
     return _with_trace(
         answer,
         _scope_trace(df, exploded),
@@ -862,14 +1074,32 @@ def answer_question_with_openai(
     model: str | None = None,
     context: AgentContext | None = None,
     memory: AgentMemory | None = None,
+    filter_df: pd.DataFrame | None = None,
+    filter_exploded: pd.DataFrame | None = None,
 ) -> AgentAnswer:
     cleaned = question.strip()
     if not cleaned:
-        return answer_question(question, df, exploded, context=context, memory=memory)
+        return answer_question(
+            question,
+            df,
+            exploded,
+            context=context,
+            memory=memory,
+            filter_df=filter_df,
+            filter_exploded=filter_exploded,
+        )
 
     resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not resolved_api_key:
-        fallback = answer_question(question, df, exploded, context=context, memory=memory)
+        fallback = answer_question(
+            question,
+            df,
+            exploded,
+            context=context,
+            memory=memory,
+            filter_df=filter_df,
+            filter_exploded=filter_exploded,
+        )
         return AgentAnswer(
             question=fallback.question,
             summary=fallback.summary,
@@ -880,6 +1110,7 @@ def answer_question_with_openai(
                 AgentTraceStep("Plan", "No OpenAI API key was configured, so the local router handled the request."),
                 *fallback.trace,
             ),
+            dashboard_action=fallback.dashboard_action,
         )
 
     try:
@@ -921,7 +1152,15 @@ def answer_question_with_openai(
     calls = _function_calls(response)
     if not calls:
         text = _get_response_text(response)
-        fallback = answer_question(cleaned, df, exploded, context=context, memory=memory)
+        fallback = answer_question(
+            cleaned,
+            df,
+            exploded,
+            context=context,
+            memory=memory,
+            filter_df=filter_df,
+            filter_exploded=filter_exploded,
+        )
         return AgentAnswer(
             question=cleaned,
             summary=text or fallback.summary,
@@ -934,6 +1173,7 @@ def answer_question_with_openai(
                 AgentTraceStep("Tool", f"Used the local {fallback.skill} skill for evidence rows."),
                 _rows_trace(fallback),
             ),
+            dashboard_action=fallback.dashboard_action,
         )
 
     for item in getattr(response, "output", []) or []:
@@ -949,7 +1189,9 @@ def answer_question_with_openai(
         except json.JSONDecodeError:
             arguments = {}
         skill_name = str(getattr(call, "name", "catalog_overview"))
-        last_answer = run_skill(skill_name, cleaned, df, exploded, arguments)
+        skill_df = filter_df if skill_name == "set_dashboard_filters" and filter_df is not None else df
+        skill_exploded = filter_exploded if skill_name == "set_dashboard_filters" and filter_exploded is not None else exploded
+        last_answer = run_skill(skill_name, cleaned, skill_df, skill_exploded, arguments)
         argument_text = ", ".join(f"{key}={value}" for key, value in arguments.items()) or "no arguments"
         input_items.append(
             {
@@ -966,7 +1208,15 @@ def answer_question_with_openai(
     )
     final_text = _get_response_text(final_response)
     if last_answer is None:
-        last_answer = answer_question(cleaned, df, exploded, context=context, memory=memory)
+        last_answer = answer_question(
+            cleaned,
+            df,
+            exploded,
+            context=context,
+            memory=memory,
+            filter_df=filter_df,
+            filter_exploded=filter_exploded,
+        )
     return AgentAnswer(
         question=cleaned,
         summary=final_text or last_answer.summary,
@@ -980,4 +1230,5 @@ def answer_question_with_openai(
             _rows_trace(last_answer),
             AgentTraceStep("Explain", "Sent the tool result back to OpenAI for the final wording."),
         ),
+        dashboard_action=last_answer.dashboard_action,
     )

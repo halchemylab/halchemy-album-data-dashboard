@@ -50,6 +50,15 @@ def sample_data(tmp_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
                 Notes="Loose and confident rock record.",
                 **{"Global Rating": 3.76},
             ),
+            valid_row(
+                Artist="Alice Coltrane",
+                Album="Journey in Satchidananda",
+                Released=1971,
+                Rating="",
+                Genres="jazz",
+                Notes="Spiritual jazz with harp and drone.",
+                **{"Global Rating": 4.11},
+            ),
         ]
     ).to_csv(csv_path, index=False)
     return load_data(csv_path)
@@ -139,6 +148,39 @@ def test_answer_question_returns_story_insights(tmp_path: Path) -> None:
     assert answer.skill == "story_insights"
     assert "story-ready insights" in answer.summary
     assert "Insight" in answer.detail.columns
+
+
+def test_answer_question_can_request_dashboard_filter_action(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+    rock = df.loc[df["PrimaryGenre"].eq("rock")]
+    rock_keys = pd.MultiIndex.from_frame(rock[["Artist", "Album", "Released"]])
+    exploded_keys = pd.MultiIndex.from_frame(exploded[["Artist", "Album", "Released"]])
+    rock_exploded = exploded.loc[exploded_keys.isin(rock_keys)]
+
+    answer = answer_question(
+        "Show me unrated jazz from the 1970s",
+        rock,
+        rock_exploded,
+        filter_df=df,
+        filter_exploded=exploded,
+    )
+
+    assert answer.skill == "set_dashboard_filters"
+    assert answer.dashboard_action is not None
+    assert answer.dashboard_action["type"] == "set_filters"
+    filters = answer.dashboard_action["filters"]
+    assert filters["genres"] == ["jazz"]
+    assert filters["decades"] == ["1970s"]
+    assert filters["statuses"] == ["unrated"]
+
+
+def test_answer_question_can_request_filter_reset(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    answer = answer_question("Reset dashboard filters", df, exploded)
+
+    assert answer.skill == "set_dashboard_filters"
+    assert answer.dashboard_action == {"type": "set_filters", "clear_existing": True, "filters": {}}
 
 
 def test_openai_agent_falls_back_without_api_key(tmp_path: Path, monkeypatch) -> None:
