@@ -4,7 +4,7 @@ A Streamlit dashboard for exploring `albums.csv`: ratings, genres, eras, notes, 
 
 The dashboard also includes an **Album Agent** tab. It is a skill-based data agent: the chat interface sends questions to an agent layer, the agent chooses an album-analysis skill, the skill runs deterministic pandas analysis over the currently filtered data, and the answer is summarized back in the UI.
 
-Agentic features include natural-language recommendations, genre and taste-gap analysis, notes search, durable taste memory, follow-up context, one-page taste reports, slide-style story insights, and guided dashboard walkthroughs that can apply filters for you.
+Agentic features include natural-language recommendations, genre and taste-gap analysis, notes search, durable taste memory, follow-up context, one-page taste reports, slide-style story insights, guided dashboard walkthroughs that can apply filters for you, listening missions, and data-backed taste hypotheses.
 
 ## Run
 
@@ -29,11 +29,17 @@ Supported skills:
 | `catalog_overview` | Counts, averages, and high-level catalog summaries |
 | `genre_analysis` | Favorite genres and genre-level rating patterns |
 | `recommendations` | Album suggestions from the current filtered catalog |
+| `listening_mission` | Actionable listening paths that bridge known favorites into unresolved albums |
 | `playlist_builder` | Sequenced listening paths, starter packs, revisit queues, and short album playlists |
 | `taste_gaps` | Where personal ratings diverge from global ratings |
 | `notes_search` | Searches freeform notes for words or phrases |
+| `taste_hypotheses` | Testable claims about taste patterns, with evidence, counterexamples, and next actions |
 | `story_insights` | Capstone-ready narrative insights, one-page taste reports, listener profiles, and slide outlines backed by data |
 | `dashboard_walkthrough` | Applies dashboard filters and gives a step-by-step analysis path through the relevant tabs |
+
+The Agent tab renders mission and hypothesis answers as action-oriented blocks instead of plain tables. Mission results can be saved locally to `listening_missions.json`, which is ignored by git. Album rows returned by the agent include quick actions for similar albums, explanations, and mission creation.
+
+The Explorer tab also includes an album assistant panel for the selected album. It highlights how the album sits against personal/global ratings, finds a nearby liked album and unresolved match, and can seed the Agent tab with contextual follow-up prompts.
 
 To enable OpenAI mode, set your key before running Streamlit:
 
