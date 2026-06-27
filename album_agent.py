@@ -1028,6 +1028,103 @@ def _top_genre_summary(exploded: pd.DataFrame) -> tuple[str, str]:
     return str(top["Genre"]), f"{top['Albums']:.0f} albums, {top['AvgRating']:.2f} avg rating"
 
 
+def _confidence_label(score: float) -> str:
+    if score >= 0.75:
+        return "High"
+    if score >= 0.45:
+        return "Medium"
+    return "Low"
+
+
+def taste_hypotheses(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:
+    rated = df.dropna(subset=["RatingNum"]).copy()
+    rated_genres = exploded.dropna(subset=["RatingNum"]).copy()
+    gaps = df.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
+    rows: list[dict[str, object]] = []
+
+    if not rated_genres.empty:
+        genre_summary = (
+            rated_genres.groupby("Genre", as_index=False)
+            .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"), AvgGlobal=("Global Rating", "mean"))
+            .query("Albums >= 2")
+            .sort_values(["AvgRating", "Albums"], ascending=[False, False])
+        )
+        if not genre_summary.empty:
+            top = genre_summary.iloc[0]
+            evidence = rated_genres.loc[rated_genres["Genre"].eq(top["Genre"])].sort_values(
+                ["RatingNum", "Global Rating"],
+                ascending=[False, False],
+            )
+            counter = rated_genres.loc[
+                rated_genres["Genre"].ne(top["Genre"]) & rated_genres["RatingNum"].lt(float(top["AvgRating"]))
+            ].sort_values(["RatingNum", "Global Rating"], ascending=[False, False])
+            confidence = min(0.95, float(top["Albums"]) / max(4.0, float(rated["RatingNum"].count() or 1)) + 0.35)
+            rows.append(
+                {
+                    "Hypothesis": f"{top['Genre']} is one of your strongest repeatable taste signals.",
+                    "Confidence": _confidence_label(confidence),
+                    "Evidence": _album_label_or_dash(evidence),
+                    "Counterexample": _album_label_or_dash(counter),
+                    "Action": f"Explore more {top['Genre']} albums, then compare the misses.",
+                }
+            )
+
+    if not gaps.empty:
+        above = gaps.sort_values("RatingDelta", ascending=False)
+        below = gaps.sort_values("RatingDelta", ascending=True)
+        if not above.empty:
+            rows.append(
+                {
+                    "Hypothesis": "Your best discoveries may sit above consensus rather than inside the safest classics.",
+                    "Confidence": _confidence_label(min(0.9, abs(float(above.iloc[0]["RatingDelta"])) / 2.0)),
+                    "Evidence": _format_album(above.iloc[0]),
+                    "Counterexample": _format_album(below.iloc[0]) if not below.empty else "-",
+                    "Action": "Use above-consensus albums as anchors for the next listening mission.",
+                }
+            )
+        if len(below) >= 1:
+            rows.append(
+                {
+                    "Hypothesis": "Some high-consensus albums are resistance points for your taste.",
+                    "Confidence": _confidence_label(min(0.9, abs(float(below.iloc[0]["RatingDelta"])) / 2.0)),
+                    "Evidence": _format_album(below.iloc[0]),
+                    "Counterexample": _format_album(above.iloc[0]) if not above.empty else "-",
+                    "Action": "Inspect notes on below-consensus albums before adding similar unresolved picks.",
+                }
+            )
+
+    unresolved = df.loc[df["RatingStatus"].eq("unrated")].sort_values(
+        ["Global Rating", "Released"],
+        ascending=[False, False],
+        na_position="last",
+    )
+    if not unresolved.empty and not rated.empty:
+        rows.append(
+            {
+                "Hypothesis": "Your unresolved queue has enough signal to become a focused discovery path.",
+                "Confidence": _confidence_label(min(0.85, len(unresolved) / max(4.0, len(df)) + 0.35)),
+                "Evidence": _album_label_or_dash(unresolved),
+                "Counterexample": _album_label_or_dash(rated.sort_values("RatingNum", ascending=True)),
+                "Action": "Start a listening mission that bridges from a rated favorite into this queue.",
+            }
+        )
+
+    detail = _records_frame(rows)
+    if detail.empty:
+        return AgentAnswer(
+            question=question,
+            summary="I need more rated albums, genres, or global ratings before I can produce useful taste hypotheses.",
+            detail=_empty_detail(),
+            skill="taste_hypotheses",
+        )
+    return AgentAnswer(
+        question=question,
+        summary=f"I generated {len(detail):,} testable taste hypotheses with evidence and counterexamples.",
+        detail=detail,
+        skill="taste_hypotheses",
+    )
+
+
 def taste_report(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:
     rated = df.dropna(subset=["RatingNum"]).copy()
     gap = df.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
@@ -1185,6 +1282,7 @@ SKILLS: dict[str, SkillHandler] = {
     "taste_gaps": taste_gaps,
     "genre_analysis": genre_analysis,
     "notes_search": notes_search,
+    "taste_hypotheses": taste_hypotheses,
     "story_insights": story_insights,
     "dashboard_walkthrough": lambda question, df, exploded: dashboard_walkthrough(question, df, exploded),
     "set_dashboard_filters": lambda question, df, exploded: set_dashboard_filters(question, df, exploded),
@@ -1287,6 +1385,16 @@ AGENT_TOOLS = [
                 }
             },
             "required": ["terms"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "taste_hypotheses",
+        "description": "Generate testable hypotheses about the user's music taste, with evidence, counterexamples, and next actions.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
             "additionalProperties": False,
         },
     },
@@ -1406,6 +1514,18 @@ def choose_skill(question: str) -> str:
         any(term in lowered for term in filter_terms) or re.search(r"\b(?:19|20)\d0s\b", lowered)
     ):
         return "set_dashboard_filters"
+    if any(
+        word in lowered
+        for word in [
+            "hypothesis",
+            "hypotheses",
+            "theory",
+            "theories",
+            "pattern",
+            "patterns",
+        ]
+    ):
+        return "taste_hypotheses"
     if any(
         word in lowered
         for word in [

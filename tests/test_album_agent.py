@@ -85,6 +85,7 @@ def test_choose_skill_routes_common_questions() -> None:
     assert choose_skill("Where do I disagree with consensus?") == "taste_gaps"
     assert choose_skill("What genres do I rate highest?") == "genre_analysis"
     assert choose_skill("Find notes that mention boring") == "notes_search"
+    assert choose_skill("What hypotheses explain my taste patterns?") == "taste_hypotheses"
     assert choose_skill("Give me three capstone-ready insights") == "story_insights"
     assert choose_skill("Create a one-page report on my music taste") == "story_insights"
     assert choose_skill("Walk me through my 1970s rock taste") == "dashboard_walkthrough"
@@ -189,6 +190,17 @@ def test_answer_question_returns_story_insights(tmp_path: Path) -> None:
     assert answer.skill == "story_insights"
     assert "story-ready insights" in answer.summary
     assert "Insight" in answer.detail.columns
+
+
+def test_answer_question_returns_taste_hypotheses(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    answer = answer_question("What hypotheses explain my taste patterns?", df, exploded)
+
+    assert answer.skill == "taste_hypotheses"
+    assert "testable taste hypotheses" in answer.summary
+    assert {"Hypothesis", "Confidence", "Evidence", "Counterexample", "Action"}.issubset(answer.detail.columns)
+    assert answer.detail["Hypothesis"].str.contains("rock").any()
 
 
 def test_answer_question_builds_taste_report(tmp_path: Path) -> None:
