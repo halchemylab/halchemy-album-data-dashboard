@@ -11,6 +11,7 @@ import streamlit as st
 from album_agent import AgentAnswer, answer_question, answer_question_with_openai
 from album_data import AlbumDataError, RATING_LABEL_MAP, RATING_ORDER, load_data, notes_keywords
 from album_memory import build_agent_memory, ensure_agent_memory, save_agent_memory
+from album_missions import add_mission, load_missions
 
 
 DATA_PATH = Path(__file__).with_name("albums.csv")
@@ -352,6 +353,87 @@ def render_agent_trace(answer: AgentAnswer) -> None:
             st.caption(step.detail)
 
 
+def queue_agent_followup(question: str, selected_album: dict[str, object] | None = None) -> None:
+    if selected_album:
+        st.session_state[AGENT_CONTEXT_KEY] = {
+            "last_question": "Quick action",
+            "last_skill": "row_action",
+            "last_summary": f"Selected {selected_album.get('Artist')} - {selected_album.get('Album')}",
+            "last_rows": [selected_album],
+            "selected_album": selected_album,
+        }
+    st.session_state[AGENT_QUESTION_KEY] = question
+    st.rerun()
+
+
+def render_saved_missions() -> None:
+    data = load_missions()
+    missions = data.get("missions", [])
+    if not isinstance(missions, list) or not missions:
+        return
+    with st.expander("Saved listening missions", expanded=False):
+        for mission in missions[:4]:
+            if not isinstance(mission, dict):
+                continue
+            st.markdown(f"**{escape(str(mission.get('title', 'Listening mission')))}**")
+            st.caption(f"{mission.get('status', 'not started')} | {mission.get('created_at', '-')}")
+
+
+def render_mission_answer(answer: AgentAnswer, answer_index: int) -> None:
+    if answer.detail.empty:
+        return
+    st.markdown("**Mission Path**")
+    for _, row in answer.detail.iterrows():
+        cols = st.columns([0.08, 0.2, 0.28, 0.16, 0.28], vertical_alignment="center")
+        cols[0].metric("Step", int(row.get("Step", 0)))
+        cols[1].markdown(f"**{escape(str(row.get('Role', '-')))}**")
+        cols[2].write(f"{row.get('Artist', '-')} - {row.get('Album', '-')}")
+        cols[3].caption(str(row.get("Status", "-")))
+        cols[4].caption(str(row.get("Why", "")))
+    save_key = f"save_mission_{answer_index}_{len(st.session_state.get(AGENT_HISTORY_KEY, []))}"
+    if st.button("Save mission", key=save_key):
+        add_mission(
+            {
+                "title": answer.summary.split(".")[0],
+                "summary": answer.summary,
+                "steps": answer.detail.where(pd.notna(answer.detail), None).to_dict(orient="records"),
+            }
+        )
+        st.toast("Mission saved.")
+
+
+def render_hypothesis_answer(answer: AgentAnswer) -> None:
+    if answer.detail.empty:
+        return
+    st.markdown("**Taste Hypotheses**")
+    for index, row in answer.detail.iterrows():
+        st.markdown(f"**{index + 1}. {escape(str(row.get('Hypothesis', '-')))}**")
+        st.caption(f"Confidence: {row.get('Confidence', '-')}")
+        evidence_col, counter_col, action_col = st.columns(3)
+        evidence_col.write(f"Evidence: {row.get('Evidence', '-')}")
+        counter_col.write(f"Counterexample: {row.get('Counterexample', '-')}")
+        action_col.write(f"Next: {row.get('Action', '-')}")
+
+
+def render_agent_row_actions(answer: AgentAnswer, answer_index: int) -> None:
+    if answer.detail.empty or not {"Artist", "Album"}.issubset(answer.detail.columns):
+        return
+    rows = answer.detail.head(3).where(pd.notna(answer.detail.head(3)), None).to_dict(orient="records")
+    if not rows:
+        return
+    st.markdown("**Quick actions**")
+    for row_index, row in enumerate(rows):
+        label = f"{row.get('Artist', '-')} - {row.get('Album', '-')}"
+        st.caption(label)
+        cols = st.columns(3)
+        if cols[0].button("Find similar", key=f"similar_{answer_index}_{row_index}", use_container_width=True):
+            queue_agent_followup("Show more like this", row)
+        if cols[1].button("Explain", key=f"explain_{answer_index}_{row_index}", use_container_width=True):
+            queue_agent_followup("Why this?", row)
+        if cols[2].button("Make mission", key=f"mission_{answer_index}_{row_index}", use_container_width=True):
+            queue_agent_followup("Create a listening mission from this album", row)
+
+
 def apply_agent_dashboard_action(answer: AgentAnswer, full_catalog: pd.DataFrame, full_genres: pd.DataFrame) -> bool:
     action = answer.dashboard_action
     if not isinstance(action, dict) or action.get("type") != "set_filters":
@@ -440,6 +522,7 @@ def render_agent(
         save_agent_memory(memory)
         st.rerun()
     render_agent_memory(memory)
+    render_saved_missions()
     render_agent_context_controls()
 
     api_key = os.getenv("OPENAI_API_KEY") or optional_secret("OPENAI_API_KEY")
@@ -455,9 +538,9 @@ def render_agent(
 
     examples = [
         "What should I listen to next?",
+        "Create a listening mission",
+        "What hypotheses explain my taste patterns?",
         "Build a 3-album starter pack",
-        "What genres do I rate highest?",
-        "Create a one-page taste report",
     ]
     example_cols = st.columns(len(examples))
     for col, example in zip(example_cols, examples):
@@ -530,14 +613,19 @@ def render_agent(
         )
         return
 
-    for answer in st.session_state[AGENT_HISTORY_KEY]:
+    for answer_index, answer in enumerate(st.session_state[AGENT_HISTORY_KEY]):
         with st.container(border=True):
             st.markdown(f"**You:** {escape(answer.question)}")
             st.write(answer.summary)
             st.caption(f"Skill used: {answer.skill} | Mode: {answer.mode}")
             render_agent_trace(answer)
-            if not answer.detail.empty:
+            if answer.skill == "listening_mission":
+                render_mission_answer(answer, answer_index)
+            elif answer.skill == "taste_hypotheses":
+                render_hypothesis_answer(answer)
+            elif not answer.detail.empty:
                 compact_table(answer.detail, answer.detail.columns.tolist(), height=260)
+            render_agent_row_actions(answer, answer_index)
 
 
 def render_soundprint(selected: pd.DataFrame, selected_genres: pd.DataFrame) -> None:
