@@ -26,6 +26,13 @@ class AgentAnswer:
     dashboard_action: dict[str, object] | None = None
 
 
+@dataclass(frozen=True)
+class ProactivePrompt:
+    key: str
+    message: str
+    actions: tuple[str, ...]
+
+
 SkillHandler = Callable[[str, pd.DataFrame, pd.DataFrame], AgentAnswer]
 AgentContext = dict[str, Any]
 AgentMemory = dict[str, Any]
@@ -1123,6 +1130,95 @@ def taste_hypotheses(question: str, df: pd.DataFrame, exploded: pd.DataFrame) ->
         detail=detail,
         skill="taste_hypotheses",
     )
+
+
+def build_proactive_prompt(
+    df: pd.DataFrame,
+    exploded: pd.DataFrame,
+    memory: AgentMemory | None = None,
+    context: AgentContext | None = None,
+) -> ProactivePrompt | None:
+    if df.empty:
+        return None
+
+    unresolved = df.loc[df["RatingStatus"].eq("unrated")].sort_values(
+        ["Global Rating", "Released"],
+        ascending=[False, False],
+        na_position="last",
+    )
+    rated = df.dropna(subset=["RatingNum"]).copy()
+    gaps = df.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
+    rated_genres = exploded.dropna(subset=["RatingNum"]).copy()
+
+    if not unresolved.empty:
+        top = unresolved.iloc[0]
+        album = _format_album(top)
+        return ProactivePrompt(
+            key=f"unresolved:{_row_identity(top)}",
+            message=(
+                f"I found a useful loose end: {album} is still unresolved here"
+                + (
+                    f" with a {top['Global Rating']:.2f} global signal."
+                    if pd.notna(top.get("Global Rating"))
+                    else "."
+                )
+                + " Want me to turn it into a short listening mission?"
+            ),
+            actions=("Create a listening mission", "Show unresolved high-signal albums", "Try another idea"),
+        )
+
+    if not rated_genres.empty:
+        genre_summary = (
+            rated_genres.groupby("Genre", as_index=False)
+            .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"))
+            .query("Albums >= 2")
+            .sort_values(["AvgRating", "Albums"], ascending=[False, False])
+        )
+        if not genre_summary.empty:
+            top = genre_summary.iloc[0]
+            return ProactivePrompt(
+                key=f"genre:{top['Genre']}:{int(top['Albums'])}",
+                message=(
+                    f"Want to test a theory? {top['Genre']} is your strongest repeated signal in this slice: "
+                    f"{int(top['Albums'])} albums averaging {top['AvgRating']:.2f}."
+                ),
+                actions=("What hypotheses explain my taste patterns?", f"Show me more {top['Genre']}", "Build a starter pack"),
+            )
+
+    if not gaps.empty:
+        strongest = gaps.reindex(gaps["RatingDelta"].abs().sort_values(ascending=False).index).iloc[0]
+        return ProactivePrompt(
+            key=f"gap:{_row_identity(strongest)}",
+            message=(
+                f"There is a sharp taste split hiding here: {_format_album(strongest)} is "
+                f"{strongest['RatingDelta']:+.2f} away from consensus. Want to inspect that pattern?"
+            ),
+            actions=("Where do I disagree with consensus?", "Compare against my overall taste", "Create a taste report"),
+        )
+
+    if len(df) >= 4 and rated.empty:
+        return ProactivePrompt(
+            key=f"unrated-slice:{len(df)}",
+            message=(
+                f"This whole slice is unresolved: {len(df):,} albums and no personal ratings yet. "
+                "I can make it easier to start with a small mission."
+            ),
+            actions=("Create a listening mission", "Show highest global ratings", "Reset dashboard filters"),
+        )
+
+    if context:
+        selected = _context_album("this", context)
+        if selected:
+            return ProactivePrompt(
+                key=f"context:{_row_identity(selected)}",
+                message=(
+                    f"I can keep going from {_format_context_album(selected)}. "
+                    "Want a similar pick, a quick explanation, or a mission around it?"
+                ),
+                actions=("Show more like this", "Why this?", "Create a listening mission from this album"),
+            )
+
+    return None
 
 
 def taste_report(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:

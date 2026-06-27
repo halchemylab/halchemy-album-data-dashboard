@@ -3,12 +3,18 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 import os
+import time
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from album_agent import AgentAnswer, answer_question, answer_question_with_openai
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
+
+from album_agent import AgentAnswer, ProactivePrompt, answer_question, answer_question_with_openai, build_proactive_prompt
 from album_data import AlbumDataError, RATING_LABEL_MAP, RATING_ORDER, load_data, notes_keywords
 from album_memory import build_agent_memory, ensure_agent_memory, save_agent_memory
 from album_missions import add_mission, load_missions
@@ -37,6 +43,10 @@ AGENT_QUESTION_KEY = "agent_question"
 AGENT_HISTORY_KEY = "agent_history"
 AGENT_CONTEXT_KEY = "agent_context"
 AGENT_PIN_CONTEXT_KEY = "agent_pin_context"
+AGENT_LAST_INTERACTION_KEY = "agent_last_interaction_at"
+AGENT_IDLE_SIGNATURE_KEY = "agent_idle_signature"
+AGENT_PROACTIVE_SEEN_KEY = "agent_proactive_seen"
+AGENT_IDLE_SECONDS = 10
 
 
 st.set_page_config(
@@ -374,6 +384,7 @@ def render_agent_context_controls() -> None:
     with right:
         st.toggle("Pin context", key=AGENT_PIN_CONTEXT_KEY, disabled=not bool(context))
         if st.button("Clear context", disabled=not bool(context), use_container_width=True):
+            mark_agent_interaction()
             st.session_state[AGENT_CONTEXT_KEY] = None
             st.session_state[AGENT_PIN_CONTEXT_KEY] = False
             st.rerun()
@@ -392,6 +403,7 @@ def render_followup_buttons() -> None:
     cols = st.columns(len(followups))
     for col, followup in zip(cols, followups):
         if col.button(followup, use_container_width=True):
+            mark_agent_interaction()
             st.session_state[AGENT_QUESTION_KEY] = followup
 
 
@@ -404,7 +416,12 @@ def render_agent_trace(answer: AgentAnswer) -> None:
             st.caption(step.detail)
 
 
+def mark_agent_interaction() -> None:
+    st.session_state[AGENT_LAST_INTERACTION_KEY] = time.time()
+
+
 def queue_agent_followup(question: str, selected_album: dict[str, object] | None = None) -> None:
+    mark_agent_interaction()
     if selected_album:
         st.session_state[AGENT_CONTEXT_KEY] = {
             "last_question": "Quick action",
@@ -415,6 +432,62 @@ def queue_agent_followup(question: str, selected_album: dict[str, object] | None
         }
     st.session_state[AGENT_QUESTION_KEY] = question
     st.rerun()
+
+
+def proactive_signature(selected: pd.DataFrame, selected_genres: pd.DataFrame, active_filters: list[str]) -> str:
+    rated = int(selected["RatingNum"].notna().sum()) if "RatingNum" in selected.columns else 0
+    unresolved = int(selected["RatingStatus"].eq("unrated").sum()) if "RatingStatus" in selected.columns else 0
+    genres = int(selected_genres["Genre"].nunique()) if "Genre" in selected_genres.columns else 0
+    return "|".join([str(len(selected)), str(rated), str(unresolved), str(genres), *active_filters])
+
+
+def render_proactive_prompt(prompt: ProactivePrompt) -> None:
+    st.markdown("**Assistant nudge**")
+    st.info(prompt.message)
+    cols = st.columns(len(prompt.actions) + 1)
+    for index, action in enumerate(prompt.actions):
+        if cols[index].button(action, key=f"proactive_action_{prompt.key}_{index}", use_container_width=True):
+            seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
+            st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
+            queue_agent_followup(action)
+    if cols[-1].button("Not now", key=f"proactive_dismiss_{prompt.key}", use_container_width=True):
+        seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
+        st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
+        mark_agent_interaction()
+        st.rerun()
+
+
+def render_idle_agent_nudge(
+    selected: pd.DataFrame,
+    selected_genres: pd.DataFrame,
+    active_filters: list[str],
+    memory: dict[str, object],
+) -> None:
+    signature = proactive_signature(selected, selected_genres, active_filters)
+    if st.session_state.get(AGENT_IDLE_SIGNATURE_KEY) != signature:
+        st.session_state[AGENT_IDLE_SIGNATURE_KEY] = signature
+        st.session_state[AGENT_LAST_INTERACTION_KEY] = time.time()
+    st.session_state.setdefault(AGENT_LAST_INTERACTION_KEY, time.time())
+    st.session_state.setdefault(AGENT_PROACTIVE_SEEN_KEY, [])
+
+    prompt = build_proactive_prompt(
+        selected,
+        selected_genres,
+        memory=memory,
+        context=st.session_state.get(AGENT_CONTEXT_KEY),
+    )
+    if prompt is None or prompt.key in st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []):
+        return
+
+    idle_for = time.time() - float(st.session_state[AGENT_LAST_INTERACTION_KEY])
+    if idle_for < AGENT_IDLE_SECONDS:
+        if st_autorefresh is not None:
+            st_autorefresh(interval=1000, limit=AGENT_IDLE_SECONDS + 1, key=f"agent_idle_refresh_{signature}")
+        else:
+            st.caption("The assistant can surface a nudge after a short pause when streamlit-autorefresh is installed.")
+        return
+
+    render_proactive_prompt(prompt)
 
 
 def render_saved_missions() -> None:
@@ -443,6 +516,7 @@ def render_mission_answer(answer: AgentAnswer, answer_index: int) -> None:
         cols[4].caption(str(row.get("Why", "")))
     save_key = f"save_mission_{answer_index}_{len(st.session_state.get(AGENT_HISTORY_KEY, []))}"
     if st.button("Save mission", key=save_key):
+        mark_agent_interaction()
         add_mission(
             {
                 "title": answer.summary.split(".")[0],
@@ -569,12 +643,14 @@ def render_agent(
     render_agent_scope(selected, selected_genres, active_filters)
     refresh_memory = st.button("Refresh durable memory", use_container_width=False)
     if refresh_memory:
+        mark_agent_interaction()
         memory = build_agent_memory(full_catalog, full_genres)
         save_agent_memory(memory)
         st.rerun()
     render_agent_memory(memory)
     render_saved_missions()
     render_agent_context_controls()
+    render_idle_agent_nudge(selected, selected_genres, active_filters, memory)
 
     api_key = os.getenv("OPENAI_API_KEY") or optional_secret("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL") or optional_secret("OPENAI_MODEL", "gpt-5.5")
@@ -596,6 +672,7 @@ def render_agent(
     example_cols = st.columns(len(examples))
     for col, example in zip(example_cols, examples):
         if col.button(example, use_container_width=True):
+            mark_agent_interaction()
             st.session_state[AGENT_QUESTION_KEY] = example
     render_followup_buttons()
 
@@ -608,6 +685,7 @@ def render_agent(
         submitted = st.form_submit_button("Ask agent", use_container_width=True)
 
     if submitted and question.strip():
+        mark_agent_interaction()
         try:
             if use_openai:
                 answer = answer_question_with_openai(

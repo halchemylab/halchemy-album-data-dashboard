@@ -5,7 +5,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from album_agent import answer_question, answer_question_with_openai, choose_skill
+from album_agent import answer_question, answer_question_with_openai, build_proactive_prompt, choose_skill
 from album_data import load_data
 from test_data_validation import valid_row
 
@@ -136,6 +136,32 @@ def test_answer_question_builds_listening_mission(tmp_path: Path) -> None:
     assert {"Mission", "Step", "Role", "Status", "Why"}.issubset(answer.detail.columns)
     assert answer.detail["Role"].tolist()[0] == "Anchor"
     assert "Journey in Satchidananda" in answer.detail["Album"].tolist()
+
+
+def test_build_proactive_prompt_prioritizes_unresolved_album(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    prompt = build_proactive_prompt(df, exploded)
+
+    assert prompt is not None
+    assert prompt.key.startswith("unresolved:")
+    assert "Journey in Satchidananda" in prompt.message
+    assert "Create a listening mission" in prompt.actions
+
+
+def test_build_proactive_prompt_falls_back_to_genre_pattern(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+    rated = df.loc[df["RatingStatus"].ne("unrated")].copy()
+    rated_keys = pd.MultiIndex.from_frame(rated[["Artist", "Album", "Released"]])
+    exploded_keys = pd.MultiIndex.from_frame(exploded[["Artist", "Album", "Released"]])
+    rated_exploded = exploded.loc[exploded_keys.isin(rated_keys)].copy()
+
+    prompt = build_proactive_prompt(rated, rated_exploded)
+
+    assert prompt is not None
+    assert prompt.key.startswith("genre:")
+    assert "rock" in prompt.message
+    assert "What hypotheses explain my taste patterns?" in prompt.actions
 
 
 def test_followup_can_explain_second_result(tmp_path: Path) -> None:
