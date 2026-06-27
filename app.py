@@ -270,6 +270,57 @@ def render_album_detail(album: pd.Series) -> None:
         st.write(notes)
 
 
+def genre_set(value: object) -> set[str]:
+    return {genre.strip().casefold() for genre in str(value or "").split(",") if genre.strip()}
+
+
+def render_album_assistant(album: pd.Series, selected: pd.DataFrame) -> None:
+    st.markdown("**Assistant Context**")
+    rating = album.get("RatingNum")
+    global_rating = album.get("Global Rating")
+    delta = album.get("RatingDelta")
+    if pd.notna(rating) and pd.notna(global_rating):
+        if pd.notna(delta) and float(delta) >= 0:
+            st.caption(f"You rate this {float(delta):+.2f} above the global signal.")
+        elif pd.notna(delta):
+            st.caption(f"You rate this {float(delta):+.2f} below the global signal.")
+        else:
+            st.caption("This has both personal and global rating context.")
+    elif album.get("RatingStatus") == "unrated":
+        st.caption("This is unresolved, so it can become a useful mission target.")
+    else:
+        st.caption("Use this album as the active context for a focused agent follow-up.")
+
+    source_genres = genre_set(album.get("Genres"))
+    similar = selected.copy()
+    same_album = (
+        similar["Artist"].astype(str).eq(str(album.get("Artist")))
+        & similar["Album"].astype(str).eq(str(album.get("Album")))
+        & similar["Released"].eq(album.get("Released"))
+    )
+    similar = similar.loc[~same_album]
+    if source_genres:
+        similar = similar.loc[similar["Genres"].fillna("").apply(lambda value: bool(genre_set(value) & source_genres))]
+    liked = similar.dropna(subset=["RatingNum"]).sort_values(["RatingNum", "Global Rating"], ascending=[False, False]).head(1)
+    unresolved = similar.loc[similar["RatingStatus"].eq("unrated")].sort_values(
+        ["Global Rating", "Released"],
+        ascending=[False, False],
+        na_position="last",
+    ).head(1)
+    cols = st.columns(2)
+    cols[0].metric("Closest liked", album_selector_label(liked.iloc[0]) if not liked.empty else "-")
+    cols[1].metric("Unresolved match", album_selector_label(unresolved.iloc[0]) if not unresolved.empty else "-")
+
+    context_album = album.where(pd.notna(album), None).to_dict()
+    action_cols = st.columns(3)
+    if action_cols[0].button("Explain", key="album_assistant_explain", use_container_width=True):
+        queue_agent_followup("Why this?", context_album)
+    if action_cols[1].button("Similar", key="album_assistant_similar", use_container_width=True):
+        queue_agent_followup("Show more like this", context_album)
+    if action_cols[2].button("Mission", key="album_assistant_mission", use_container_width=True):
+        queue_agent_followup("Create a listening mission from this album", context_album)
+
+
 def render_agent_scope(
     selected: pd.DataFrame,
     selected_genres: pd.DataFrame,
@@ -1199,6 +1250,7 @@ def main() -> None:
         detail_col, table_col = st.columns([0.36, 0.64], gap="large")
         with detail_col:
             render_album_detail(selected_album)
+            render_album_assistant(selected_album, selected)
         with table_col:
             st.markdown("**Top Matches**")
             compact_table(table_df.head(25), explorer_cols, height=430)
