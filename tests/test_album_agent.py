@@ -80,6 +80,7 @@ def answer_context(answer):
 def test_choose_skill_routes_common_questions() -> None:
     assert choose_skill("What should I listen to next?") == "recommendations"
     assert choose_skill("Build me a 3 album starter pack") == "playlist_builder"
+    assert choose_skill("Create a listening mission for me") == "listening_mission"
     assert choose_skill("Show me a rock playlist") == "playlist_builder"
     assert choose_skill("Where do I disagree with consensus?") == "taste_gaps"
     assert choose_skill("What genres do I rate highest?") == "genre_analysis"
@@ -122,6 +123,18 @@ def test_answer_question_builds_unrated_discovery_playlist(tmp_path: Path) -> No
     assert "unrated discovery" in answer.summary
     assert answer.detail["Album"].tolist() == ["Journey in Satchidananda"]
     assert pd.isna(answer.detail["RatingNum"].tolist()[0])
+
+
+def test_answer_question_builds_listening_mission(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    answer = answer_question("Create a listening mission for me", df, exploded)
+
+    assert answer.skill == "listening_mission"
+    assert "listening mission" in answer.summary
+    assert {"Mission", "Step", "Role", "Status", "Why"}.issubset(answer.detail.columns)
+    assert answer.detail["Role"].tolist()[0] == "Anchor"
+    assert "Journey in Satchidananda" in answer.detail["Album"].tolist()
 
 
 def test_followup_can_explain_second_result(tmp_path: Path) -> None:

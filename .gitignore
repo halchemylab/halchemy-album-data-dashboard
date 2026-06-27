@@ -2,3 +2,4 @@ __pycache__/
 *.py[cod]
 .streamlit/secrets.toml
 agent_memory.json
+listening_missions.json

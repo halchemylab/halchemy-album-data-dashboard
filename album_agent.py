@@ -844,6 +844,59 @@ def playlist_builder(
     return AgentAnswer(question=question, summary=summary, detail=_records_frame(rows), skill="playlist_builder")
 
 
+def listening_mission(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:
+    anchor_answer = recommendations("Recommend a familiar anchor", df, exploded)
+    anchor_rows = _clean_records(anchor_answer.detail, 1)
+    unresolved_answer = playlist_builder("Build a four album unrated discovery playlist", df, exploded, {"count": 4})
+    unresolved_rows = _clean_records(unresolved_answer.detail, 3)
+    if not anchor_rows and not unresolved_rows:
+        return AgentAnswer(
+            question=question,
+            summary="I need either rated albums or unresolved albums before I can create a useful listening mission.",
+            detail=_empty_detail(),
+            skill="listening_mission",
+        )
+
+    rows: list[dict[str, object]] = []
+    title_parts: list[str] = []
+    if anchor_rows:
+        anchor = anchor_rows[0]
+        title_parts.append(str(anchor.get("Genres") or anchor.get("Artist") or "known taste").split(",")[0])
+        rows.append(
+            {
+                "Mission": "Bridge from known taste",
+                "Step": 1,
+                "Role": "Anchor",
+                "Artist": anchor.get("Artist"),
+                "Album": anchor.get("Album"),
+                "Released": anchor.get("Released"),
+                "Status": "ready",
+                "Why": "Start with a proven high-rating signal from the current catalog slice.",
+            }
+        )
+
+    for index, row in enumerate(unresolved_rows, start=len(rows) + 1):
+        rows.append(
+            {
+                "Mission": "Bridge from known taste",
+                "Step": index,
+                "Role": "Stretch pick" if index < 4 else "Decision point",
+                "Artist": row.get("Artist"),
+                "Album": row.get("Album"),
+                "Released": row.get("Released"),
+                "Status": "not started",
+                "Why": "Use this unresolved album to test whether the anchor pattern carries into new listening.",
+            }
+        )
+
+    mission_label = title_parts[0] if title_parts else "unresolved catalog"
+    summary = (
+        f"I created a {len(rows)}-step listening mission around {mission_label}. "
+        "It starts with a known anchor, then moves into unresolved albums that can test the pattern."
+    )
+    return AgentAnswer(question=question, summary=summary, detail=_records_frame(rows), skill="listening_mission")
+
+
 def taste_gaps(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:
     data = df.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
     if data.empty:
@@ -1127,6 +1180,7 @@ def story_insights(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> A
 SKILLS: dict[str, SkillHandler] = {
     "catalog_overview": catalog_overview,
     "recommendations": recommendations,
+    "listening_mission": listening_mission,
     "playlist_builder": lambda question, df, exploded: playlist_builder(question, df, exploded),
     "taste_gaps": taste_gaps,
     "genre_analysis": genre_analysis,
@@ -1177,6 +1231,16 @@ AGENT_TOOLS = [
                 "decade": {"type": "string", "description": "Optional decade such as 1970s or 1990s."},
                 "artist": {"type": "string", "description": "Optional artist name to narrow the playlist."},
             },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "listening_mission",
+        "description": "Create an actionable listening mission with a familiar anchor, stretch picks, and progress-ready steps.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
             "additionalProperties": False,
         },
     },
@@ -1295,6 +1359,18 @@ def choose_skill(question: str) -> str:
         return "dashboard_walkthrough"
     if any(phrase in lowered for phrase in ["clear filters", "reset filters", "reset dashboard", "show everything"]):
         return "set_dashboard_filters"
+    if any(
+        phrase in lowered
+        for phrase in [
+            "mission",
+            "listening mission",
+            "discovery mission",
+            "help me discover",
+            "what should i explore",
+            "next listening goal",
+        ]
+    ):
+        return "listening_mission"
     if any(
         phrase in lowered
         for phrase in [
