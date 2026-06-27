@@ -319,6 +319,26 @@ def _extract_decade(question: str) -> str | None:
     return None
 
 
+def _extract_count(question: str, default: int = 3, minimum: int = 2, maximum: int = 8) -> int:
+    lowered = question.lower()
+    word_counts = {
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+    }
+    for word, count in word_counts.items():
+        if re.search(rf"\b{word}\b", lowered):
+            return count
+    match = re.search(r"\b([2-8])\b", lowered)
+    if match:
+        return int(match.group(1))
+    return max(minimum, min(maximum, default))
+
+
 def _extract_decades(question: str, df: pd.DataFrame) -> list[str]:
     valid_decades = sorted(str(value) for value in df["Decade"].dropna().unique()) if "Decade" in df.columns else []
     found = {match.group(0) for match in re.finditer(r"\b(?:19|20)\d0s\b", question.lower())}
@@ -689,6 +709,141 @@ def recommendations(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> 
     )
 
 
+def _playlist_role(index: int, total: int, lowered: str, row: pd.Series) -> str:
+    if "revisit" in lowered or "reconsider" in lowered:
+        roles = ["Revisit first", "Consensus check", "Contrast pick", "Decision point"]
+    elif any(word in lowered for word in ["starter", "intro", "introduction"]):
+        roles = ["Gateway", "Core signal", "Deeper cut", "Stretch pick"]
+    elif any(word in lowered for word in ["tonight", "mood", "flow"]):
+        roles = ["Opener", "Centerpiece", "Closer", "Encore"]
+    else:
+        roles = ["Opener", "Anchor", "Contrast", "Closer"]
+    if total == 2 and index == 1:
+        return "Closer"
+    return roles[min(index, len(roles) - 1)]
+
+
+def _playlist_reason(row: pd.Series, role: str, lowered: str) -> str:
+    pieces = []
+    if pd.notna(row.get("RatingNum")):
+        pieces.append(f"{row['RatingNum']:.1f} personal rating")
+    elif pd.notna(row.get("Global Rating")):
+        pieces.append(f"{row['Global Rating']:.2f} global rating")
+    if pd.notna(row.get("RatingDelta")):
+        pieces.append(f"{row['RatingDelta']:+.2f} taste gap")
+    genre = str(row.get("PrimaryGenre") or row.get("Genres") or "").strip()
+    if genre:
+        pieces.append(f"{genre} signal")
+    if "revisit" in lowered or "reconsider" in lowered:
+        return f"{role}: worth checking again because it combines " + ", ".join(pieces) + "."
+    return f"{role}: sequenced here because it has " + ", ".join(pieces) + "."
+
+
+def playlist_builder(
+    question: str,
+    df: pd.DataFrame,
+    exploded: pd.DataFrame,
+    arguments: dict[str, object] | None = None,
+) -> AgentAnswer:
+    arguments = arguments or {}
+    lowered = question.lower()
+    count = _extract_count(question)
+    if arguments.get("count"):
+        try:
+            count = max(2, min(8, int(arguments["count"])))
+        except (TypeError, ValueError):
+            count = _extract_count(question)
+
+    genre = str(arguments["genre"]) if arguments.get("genre") else _extract_genre(question, exploded)
+    decade = str(arguments["decade"]) if arguments.get("decade") else _extract_decade(question)
+    artist = str(arguments["artist"]) if arguments.get("artist") else _extract_artist(question, df)
+    selected, _ = _filter_skill_data(df, exploded, genre=genre, decade=decade, artist=artist)
+
+    if any(word in lowered for word in ["unrated", "unresolved", "new to me", "discover"]):
+        candidates = selected.loc[selected["RatingStatus"].eq("unrated")].copy()
+        sort_columns = ["Global Rating", "Released"]
+        ascending = [False, False]
+        angle = "unrated discovery"
+    elif any(word in lowered for word in ["revisit", "reconsider", "second chance"]):
+        candidates = selected.dropna(subset=["Global Rating"]).copy()
+        candidates = candidates.loc[candidates["RatingStatus"].ne("unrated")]
+        if "RatingNum" in candidates.columns:
+            candidates = candidates.loc[candidates["RatingNum"].le(3) | candidates["RatingDelta"].lt(0)]
+        sort_columns = ["Global Rating", "RatingNum", "RatingDelta"]
+        ascending = [False, True, True]
+        angle = "revisit"
+    else:
+        candidates = selected.dropna(subset=["RatingNum"]).copy()
+        sort_columns = ["RatingNum", "Global Rating", "RatingDelta"]
+        ascending = [False, False, False]
+        angle = "playlist"
+
+    if candidates.empty:
+        fallback = selected.dropna(subset=["Global Rating"]).copy()
+        if fallback.empty:
+            return AgentAnswer(
+                question=question,
+                summary="I could not build a playlist from the current slice because there are no usable rating signals.",
+                detail=_empty_detail(),
+                skill="playlist_builder",
+            )
+        candidates = fallback
+        sort_columns = ["Global Rating", "Released"]
+        ascending = [False, False]
+        angle = "consensus fallback"
+
+    available_sort = [column for column in sort_columns if column in candidates.columns]
+    available_ascending = ascending[: len(available_sort)]
+    ranked = candidates.sort_values(available_sort, ascending=available_ascending, na_position="last")
+
+    picks: list[pd.Series] = []
+    used_keys: set[tuple[str, str, int | None]] = set()
+    used_genres: set[str] = set()
+    for _, row in ranked.iterrows():
+        key = _row_identity(row)
+        primary = str(row.get("PrimaryGenre", "")).casefold()
+        if key in used_keys:
+            continue
+        if len(picks) >= 2 and primary in used_genres and len(ranked) > count:
+            continue
+        picks.append(row)
+        used_keys.add(key)
+        if primary:
+            used_genres.add(primary)
+        if len(picks) >= count:
+            break
+    if len(picks) < count:
+        for _, row in ranked.iterrows():
+            key = _row_identity(row)
+            if key not in used_keys:
+                picks.append(row)
+                used_keys.add(key)
+            if len(picks) >= count:
+                break
+
+    rows = []
+    for index, row in enumerate(picks, start=1):
+        role = _playlist_role(index - 1, len(picks), lowered, row)
+        rows.append(
+            {
+                "Slot": index,
+                "Role": role,
+                "Artist": row.get("Artist"),
+                "Album": row.get("Album"),
+                "Released": row.get("Released"),
+                "RatingNum": row.get("RatingNum") if pd.notna(row.get("RatingNum")) else None,
+                "Global Rating": row.get("Global Rating") if pd.notna(row.get("Global Rating")) else None,
+                "Genres": row.get("Genres"),
+                "Reason": _playlist_reason(row, role, lowered),
+            }
+        )
+
+    context = ", ".join(part for part in [genre, decade, artist] if part)
+    scope = f" for {context}" if context else ""
+    summary = f"I built a {len(rows)}-album {angle}{scope}, sequenced from opener to closer."
+    return AgentAnswer(question=question, summary=summary, detail=_records_frame(rows), skill="playlist_builder")
+
+
 def taste_gaps(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> AgentAnswer:
     data = df.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
     if data.empty:
@@ -972,6 +1127,7 @@ def story_insights(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> A
 SKILLS: dict[str, SkillHandler] = {
     "catalog_overview": catalog_overview,
     "recommendations": recommendations,
+    "playlist_builder": lambda question, df, exploded: playlist_builder(question, df, exploded),
     "taste_gaps": taste_gaps,
     "genre_analysis": genre_analysis,
     "notes_search": notes_search,
@@ -1002,6 +1158,24 @@ AGENT_TOOLS = [
                 "genre": {"type": "string", "description": "Optional genre to narrow recommendations."},
                 "decade": {"type": "string", "description": "Optional decade such as 1970s or 1990s."},
                 "artist": {"type": "string", "description": "Optional artist name to narrow recommendations."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "playlist_builder",
+        "description": "Build a sequenced listening path, starter pack, revisit queue, or short playlist from the current filtered catalog.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "description": "Number of albums to include, from 2 through 8.",
+                },
+                "genre": {"type": "string", "description": "Optional genre to narrow the playlist."},
+                "decade": {"type": "string", "description": "Optional decade such as 1970s or 1990s."},
+                "artist": {"type": "string", "description": "Optional artist name to narrow the playlist."},
             },
             "additionalProperties": False,
         },
@@ -1121,6 +1295,21 @@ def choose_skill(question: str) -> str:
         return "dashboard_walkthrough"
     if any(phrase in lowered for phrase in ["clear filters", "reset filters", "reset dashboard", "show everything"]):
         return "set_dashboard_filters"
+    if any(
+        phrase in lowered
+        for phrase in [
+            "playlist",
+            "listening path",
+            "listening queue",
+            "starter pack",
+            "mixtape",
+            "sequence",
+            "tonight",
+            "revisit queue",
+            "bridge me",
+        ]
+    ):
+        return "playlist_builder"
     filter_verbs = ["filter", "set filters", "show me", "only show", "focus on", "narrow to", "switch to"]
     filter_terms = [
         "unrated",
@@ -1190,6 +1379,8 @@ def run_skill(
             artist=str(arguments["artist"]) if arguments.get("artist") else None,
         )
         return recommendations(question, selected, selected_genres)
+    if skill_name == "playlist_builder":
+        return playlist_builder(question, df, exploded, arguments)
     if skill_name == "taste_gaps":
         direction = str(arguments.get("direction", "above"))
         skill_question = question

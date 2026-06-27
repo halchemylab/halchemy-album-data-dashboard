@@ -79,6 +79,8 @@ def answer_context(answer):
 
 def test_choose_skill_routes_common_questions() -> None:
     assert choose_skill("What should I listen to next?") == "recommendations"
+    assert choose_skill("Build me a 3 album starter pack") == "playlist_builder"
+    assert choose_skill("Show me a rock playlist") == "playlist_builder"
     assert choose_skill("Where do I disagree with consensus?") == "taste_gaps"
     assert choose_skill("What genres do I rate highest?") == "genre_analysis"
     assert choose_skill("Find notes that mention boring") == "notes_search"
@@ -96,6 +98,30 @@ def test_answer_question_recommends_with_context(tmp_path: Path) -> None:
     assert answer.skill == "recommendations"
     assert "Beatles - A Hard Day's Night" in answer.summary
     assert answer.detail["Album"].tolist()[0] == "A Hard Day's Night"
+
+
+def test_answer_question_builds_filtered_playlist(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    answer = answer_question("Build me a 3 album rock starter pack", df, exploded)
+
+    assert answer.skill == "playlist_builder"
+    assert "3-album" in answer.summary
+    assert answer.detail["Slot"].tolist() == [1, 2, 3]
+    assert answer.detail["Role"].tolist()[0] == "Gateway"
+    assert answer.detail["Album"].tolist() == ["A Hard Day's Night", "Sticky Fingers", "Tommy"]
+    assert answer.detail["Reason"].str.contains("personal rating").all()
+
+
+def test_answer_question_builds_unrated_discovery_playlist(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    answer = answer_question("Build a two album unrated discovery playlist", df, exploded)
+
+    assert answer.skill == "playlist_builder"
+    assert "unrated discovery" in answer.summary
+    assert answer.detail["Album"].tolist() == ["Journey in Satchidananda"]
+    assert pd.isna(answer.detail["RatingNum"].tolist()[0])
 
 
 def test_followup_can_explain_second_result(tmp_path: Path) -> None:

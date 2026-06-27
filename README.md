@@ -29,6 +29,7 @@ Supported skills:
 | `catalog_overview` | Counts, averages, and high-level catalog summaries |
 | `genre_analysis` | Favorite genres and genre-level rating patterns |
 | `recommendations` | Album suggestions from the current filtered catalog |
+| `playlist_builder` | Sequenced listening paths, starter packs, revisit queues, and short album playlists |
 | `taste_gaps` | Where personal ratings diverge from global ratings |
 | `notes_search` | Searches freeform notes for words or phrases |
 | `story_insights` | Capstone-ready narrative insights, one-page taste reports, listener profiles, and slide outlines backed by data |

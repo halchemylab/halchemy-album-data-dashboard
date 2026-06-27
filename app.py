@@ -455,9 +455,9 @@ def render_agent(
 
     examples = [
         "What should I listen to next?",
+        "Build a 3-album starter pack",
         "What genres do I rate highest?",
         "Create a one-page taste report",
-        "Walk me through my 1970s rock taste",
     ]
     example_cols = st.columns(len(examples))
     for col, example in zip(example_cols, examples):
@@ -526,7 +526,7 @@ def render_agent(
     if not st.session_state[AGENT_HISTORY_KEY]:
         st.info(
             "The agent can recommend albums, summarize genre patterns, compare you against consensus, "
-            "search notes, and produce capstone-ready insights."
+            "build listening paths, search notes, and produce capstone-ready insights."
         )
         return
 
