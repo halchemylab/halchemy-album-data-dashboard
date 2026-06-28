@@ -89,6 +89,28 @@ def _records_frame(records: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def _signal_confidence(signal_count: int, *, constraints: int = 0) -> tuple[str, str]:
+    if signal_count >= 5:
+        label = "high"
+    elif signal_count >= 2:
+        label = "medium"
+    else:
+        label = "low"
+
+    if constraints:
+        reason = f"it is based on {signal_count:,} matching evidence rows after {constraints} constraint"
+        if constraints != 1:
+            reason += "s"
+    else:
+        reason = f"it is based on {signal_count:,} usable evidence rows"
+    return label, reason + "."
+
+
+def _confidence_sentence(signal_count: int, *, constraints: int = 0) -> str:
+    label, reason = _signal_confidence(signal_count, constraints=constraints)
+    return f" Confidence: {label} because {reason}"
+
+
 def _format_album(row: pd.Series) -> str:
     return f"{row['Artist']} - {row['Album']} ({int(row['Released'])})"
 
@@ -710,9 +732,15 @@ def recommendations(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> 
     top = data.iloc[0]
     context = ", ".join(part for part in [genre, decade, artist] if part)
     scope = f" matching {context}" if context else ""
+    constraints = sum(1 for part in [genre, decade, artist] if part)
+    summary = (
+        f"I would start with {_format_album(top)}. It has your rating {top['RatingNum']:.1f} "
+        f"and a global rating of {top['Global Rating']:.2f}{scope}."
+        + _confidence_sentence(len(data), constraints=constraints)
+    )
     return AgentAnswer(
         question=question,
-        summary=f"I would start with {_format_album(top)}. It has your rating {top['RatingNum']:.1f} and a global rating of {top['Global Rating']:.2f}{scope}.",
+        summary=summary,
         detail=_top_table(data, ["Artist", "Album", "Released", "RatingNum", "Global Rating", "RatingDelta", "Genres"]),
         skill="recommendations",
     )
@@ -849,7 +877,11 @@ def playlist_builder(
 
     context = ", ".join(part for part in [genre, decade, artist] if part)
     scope = f" for {context}" if context else ""
-    summary = f"I built a {len(rows)}-album {angle}{scope}, sequenced from opener to closer."
+    constraints = sum(1 for part in [genre, decade, artist] if part)
+    summary = (
+        f"I built a {len(rows)}-album {angle}{scope}, sequenced from opener to closer."
+        + _confidence_sentence(len(candidates), constraints=constraints)
+    )
     return AgentAnswer(question=question, summary=summary, detail=_records_frame(rows), skill="playlist_builder")
 
 
@@ -902,6 +934,7 @@ def listening_mission(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -
     summary = (
         f"I created a {len(rows)}-step listening mission around {mission_label}. "
         "It starts with a known anchor, then moves into unresolved albums that can test the pattern."
+        + _confidence_sentence(len(anchor_rows) + len(unresolved_rows))
     )
     return AgentAnswer(question=question, summary=summary, detail=_records_frame(rows), skill="listening_mission")
 
@@ -924,9 +957,13 @@ def taste_gaps(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> Agent
         data = data.sort_values("RatingDelta", ascending=False)
         direction = "above consensus"
     top = data.iloc[0]
+    summary = (
+        f"Your strongest {direction} signal is {_format_album(top)} with a {top['RatingDelta']:+.2f} gap."
+        + _confidence_sentence(len(data))
+    )
     return AgentAnswer(
         question=question,
-        summary=f"Your strongest {direction} signal is {_format_album(top)} with a {top['RatingDelta']:+.2f} gap.",
+        summary=summary,
         detail=_top_table(data, ["Artist", "Album", "Released", "RatingNum", "Global Rating", "RatingDelta", "Genres"]),
         skill="taste_gaps",
     )
@@ -955,6 +992,7 @@ def genre_analysis(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> A
         summary = (
             f"For {genre}, you have {len(genre_data):,} rated albums with an average rating "
             f"of {genre_data['RatingNum'].mean():.2f}."
+            + _confidence_sentence(len(genre_data), constraints=1)
         )
         detail = genre_data.sort_values(["RatingNum", "Global Rating"], ascending=[False, False])
         return AgentAnswer(
@@ -979,9 +1017,14 @@ def genre_analysis(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> A
             skill="genre_analysis",
         )
     top = summary_df.iloc[0]
+    summary = (
+        f"Your strongest genre signal is {top['Genre']} with {top['Albums']:.0f} albums "
+        f"averaging {top['AvgRating']:.2f}."
+        + _confidence_sentence(int(summary_df["Albums"].sum()))
+    )
     return AgentAnswer(
         question=question,
-        summary=f"Your strongest genre signal is {top['Genre']} with {top['Albums']:.0f} albums averaging {top['AvgRating']:.2f}.",
+        summary=summary,
         detail=_top_table(summary_df, ["Genre", "Albums", "AvgRating", "AvgGlobal", "Delta"]),
         skill="genre_analysis",
     )
@@ -1915,7 +1958,9 @@ def answer_question_with_openai(
                 "Use the provided tools for factual answers. Do not invent albums, ratings, genres, or notes. "
                 "When the user asks a follow-up, use the previous context to resolve phrases like this, that, "
                 "the second one, more like this, or why. "
-                "Keep answers concise and cite the skill result in plain language."
+                "Keep answers concise, distinguish evidence from interpretation, and cite the skill result "
+                "in plain language. Calibrate certainty: say when a recommendation or pattern is high, medium, "
+                "or low confidence based on the amount and specificity of evidence."
             ),
         },
         {"role": "user", "content": selected_summary},
