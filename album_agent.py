@@ -31,6 +31,8 @@ class ProactivePrompt:
     key: str
     message: str
     actions: tuple[str, ...]
+    reason: str = ""
+    category: str = "general"
 
 
 SkillHandler = Callable[[str, pd.DataFrame, pd.DataFrame], AgentAnswer]
@@ -1165,6 +1167,11 @@ def build_proactive_prompt(
                 + " Want me to turn it into a short listening mission?"
             ),
             actions=("Create a listening mission", "Show unresolved high-signal albums", "Try another idea"),
+            reason=(
+                "This surfaced because unresolved albums with strong outside signals are good candidates "
+                "for a low-risk next listening step."
+            ),
+            category="unresolved",
         )
 
     if not rated_genres.empty:
@@ -1183,6 +1190,11 @@ def build_proactive_prompt(
                     f"{int(top['Albums'])} albums averaging {top['AvgRating']:.2f}."
                 ),
                 actions=("What hypotheses explain my taste patterns?", f"Show me more {top['Genre']}", "Build a starter pack"),
+                reason=(
+                    "This surfaced because repeated high ratings in one genre are useful evidence for a "
+                    "taste hypothesis, not just a one-off favorite."
+                ),
+                category="genre_pattern",
             )
 
     if not gaps.empty:
@@ -1194,6 +1206,11 @@ def build_proactive_prompt(
                 f"{strongest['RatingDelta']:+.2f} away from consensus. Want to inspect that pattern?"
             ),
             actions=("Where do I disagree with consensus?", "Compare against my overall taste", "Create a taste report"),
+            reason=(
+                "This surfaced because large personal-versus-global gaps often reveal what your taste values "
+                "differently from consensus."
+            ),
+            category="taste_gap",
         )
 
     if len(df) >= 4 and rated.empty:
@@ -1204,6 +1221,11 @@ def build_proactive_prompt(
                 "I can make it easier to start with a small mission."
             ),
             actions=("Create a listening mission", "Show highest global ratings", "Reset dashboard filters"),
+            reason=(
+                "This surfaced because a fully unresolved slice can be easier to approach as a short, "
+                "bounded mission than as a long table."
+            ),
+            category="unresolved",
         )
 
     if context:
@@ -1216,6 +1238,11 @@ def build_proactive_prompt(
                     "Want a similar pick, a quick explanation, or a mission around it?"
                 ),
                 actions=("Show more like this", "Why this?", "Create a listening mission from this album"),
+                reason=(
+                    "This surfaced because your current follow-up context gives the agent a concrete album "
+                    "to continue from."
+                ),
+                category="context_followup",
             )
 
     return None

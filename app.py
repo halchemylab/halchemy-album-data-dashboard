@@ -46,6 +46,7 @@ AGENT_PIN_CONTEXT_KEY = "agent_pin_context"
 AGENT_LAST_INTERACTION_KEY = "agent_last_interaction_at"
 AGENT_IDLE_SIGNATURE_KEY = "agent_idle_signature"
 AGENT_PROACTIVE_SEEN_KEY = "agent_proactive_seen"
+AGENT_PROACTIVE_MUTED_KEY = "agent_proactive_muted"
 AGENT_IDLE_SECONDS = 10
 
 
@@ -444,12 +445,22 @@ def proactive_signature(selected: pd.DataFrame, selected_genres: pd.DataFrame, a
 def render_proactive_prompt(prompt: ProactivePrompt) -> None:
     st.markdown("**Assistant nudge**")
     st.info(prompt.message)
-    cols = st.columns(len(prompt.actions) + 1)
+    if prompt.reason:
+        with st.expander("Why this nudge?", expanded=False):
+            st.caption(prompt.reason)
+    cols = st.columns(len(prompt.actions) + 2)
     for index, action in enumerate(prompt.actions):
         if cols[index].button(action, key=f"proactive_action_{prompt.key}_{index}", use_container_width=True):
             seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
             st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
             queue_agent_followup(action)
+    if cols[-2].button("Less like this", key=f"proactive_mute_{prompt.key}", use_container_width=True):
+        seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
+        muted = list(st.session_state.get(AGENT_PROACTIVE_MUTED_KEY, []))
+        st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
+        st.session_state[AGENT_PROACTIVE_MUTED_KEY] = sorted(set([*muted, prompt.category]))
+        mark_agent_interaction()
+        st.rerun()
     if cols[-1].button("Not now", key=f"proactive_dismiss_{prompt.key}", use_container_width=True):
         seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
         st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
@@ -469,6 +480,7 @@ def render_idle_agent_nudge(
         st.session_state[AGENT_LAST_INTERACTION_KEY] = time.time()
     st.session_state.setdefault(AGENT_LAST_INTERACTION_KEY, time.time())
     st.session_state.setdefault(AGENT_PROACTIVE_SEEN_KEY, [])
+    st.session_state.setdefault(AGENT_PROACTIVE_MUTED_KEY, [])
 
     prompt = build_proactive_prompt(
         selected,
@@ -476,7 +488,12 @@ def render_idle_agent_nudge(
         memory=memory,
         context=st.session_state.get(AGENT_CONTEXT_KEY),
     )
-    if prompt is None or prompt.key in st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []):
+    muted = st.session_state.get(AGENT_PROACTIVE_MUTED_KEY, [])
+    if (
+        prompt is None
+        or prompt.key in st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, [])
+        or prompt.category in muted
+    ):
         return
 
     idle_for = time.time() - float(st.session_state[AGENT_LAST_INTERACTION_KEY])
