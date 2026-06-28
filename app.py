@@ -391,15 +391,77 @@ def render_agent_context_controls() -> None:
             st.rerun()
 
 
-def render_followup_buttons() -> None:
-    if not st.session_state.get(AGENT_CONTEXT_KEY):
-        return
-    followups = [
+def suggested_followups(answer: AgentAnswer | None) -> list[str]:
+    if answer is None:
+        return [
+            "Show more like this",
+            "Why this?",
+            "Only unrated albums",
+            "Compare against my overall taste",
+        ]
+
+    if answer.skill == "listening_mission":
+        return [
+            "Show unresolved high-signal albums",
+            "Build a 3-album starter pack",
+            "What hypotheses explain my taste patterns?",
+            "Create a taste report",
+        ]
+    if answer.skill == "taste_hypotheses":
+        return [
+            "Create a listening mission",
+            "Create a taste report",
+            "Where do I disagree with consensus?",
+            "Build a starter pack",
+        ]
+    if answer.skill == "taste_gaps":
+        return [
+            "Show below consensus albums",
+            "Show above consensus albums",
+            "What hypotheses explain my taste patterns?",
+            "Create a taste report",
+        ]
+    if answer.skill == "genre_analysis":
+        return [
+            "Build a starter pack",
+            "Create a listening mission",
+            "Where do I disagree with consensus?",
+            "Show unresolved high-signal albums",
+        ]
+    if answer.skill == "playlist_builder":
+        return [
+            "Create a listening mission",
+            "Only unrated albums",
+            "Compare against my overall taste",
+            "What hypotheses explain my taste patterns?",
+        ]
+    if answer.skill == "dashboard_walkthrough":
+        return [
+            "What should I inspect first?",
+            "Create a taste report",
+            "Where do I disagree with consensus?",
+            "Reset dashboard filters",
+        ]
+    if answer.skill == "notes_search":
+        return [
+            "Recommend from these albums",
+            "Create a listening mission",
+            "Compare against my overall taste",
+            "Create a taste report",
+        ]
+
+    return [
         "Show more like this",
         "Why this?",
         "Only unrated albums",
         "Compare against my overall taste",
     ]
+
+
+def render_followup_buttons(answer: AgentAnswer | None = None) -> None:
+    if not st.session_state.get(AGENT_CONTEXT_KEY):
+        return
+    followups = suggested_followups(answer)
     st.markdown("**Suggested follow-ups**")
     cols = st.columns(len(followups))
     for col, followup in zip(cols, followups):
@@ -691,7 +753,8 @@ def render_agent(
         if col.button(example, use_container_width=True):
             mark_agent_interaction()
             st.session_state[AGENT_QUESTION_KEY] = example
-    render_followup_buttons()
+    latest_answer = st.session_state[AGENT_HISTORY_KEY][0] if st.session_state[AGENT_HISTORY_KEY] else None
+    render_followup_buttons(latest_answer)
 
     with st.form("agent_form", clear_on_submit=False):
         question = st.text_input(
