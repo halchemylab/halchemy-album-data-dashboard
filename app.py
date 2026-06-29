@@ -1154,8 +1154,6 @@ def main() -> None:
         delta = selected["RatingDelta"].mean()
         st.metric("Taste Gap", f"{delta:+.2f}" if pd.notna(delta) else "-", help="You minus global")
 
-    render_rating_key(selected["RatingStatus"])
-
     section = st.segmented_control(
         "Section",
         ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer", "Agent"],
@@ -1167,6 +1165,8 @@ def main() -> None:
         st.subheader("Catalog")
 
         left, right = st.columns([1.05, 1])
+        with left:
+            render_rating_key(selected["RatingStatus"])
         rating_counts = (
             selected["RatingStatus"]
             .value_counts()
