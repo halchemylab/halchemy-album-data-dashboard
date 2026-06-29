@@ -728,7 +728,7 @@ def render_agent(
     full_catalog: pd.DataFrame,
     full_genres: pd.DataFrame,
 ) -> None:
-    st.subheader("Album Agent")
+    st.subheader("AI Agent")
     st.caption("Ask about the currently filtered albums. The agent chooses a data skill, runs it, and explains the result.")
 
     memory = ensure_agent_memory(full_catalog, full_genres)
@@ -1156,7 +1156,7 @@ def main() -> None:
 
     section = st.segmented_control(
         "Section",
-        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer", "Agent"],
+        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer", "AI Agent"],
         default="Catalog",
         label_visibility="collapsed",
     )
@@ -1432,7 +1432,7 @@ def main() -> None:
         with st.expander("Full table"):
             compact_table(table_df, explorer_cols, height=640)
 
-    elif section == "Agent":
+    elif section == "AI Agent":
         render_agent(selected, selected_genres, active_filters, df, exploded)
 
 
