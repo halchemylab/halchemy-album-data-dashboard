@@ -1156,11 +1156,14 @@ def main() -> None:
 
     render_rating_key(selected["RatingStatus"])
 
-    tab_overview, tab_soundprint, tab_taste, tab_gaps, tab_explorer, tab_agent = st.tabs(
-        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer", "Agent"]
+    section = st.segmented_control(
+        "Section",
+        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer", "Agent"],
+        default="Catalog",
+        label_visibility="collapsed",
     )
 
-    with tab_overview:
+    if section == "Catalog":
         st.subheader("Catalog")
 
         left, right = st.columns([1.05, 1])
@@ -1239,12 +1242,12 @@ def main() -> None:
             use_container_width=True,
         )
 
-    with tab_soundprint:
+    elif section == "Soundprint":
         st.subheader("Your Soundprint")
         st.caption("Personal patterns from the current catalog slice.")
         render_soundprint(selected, selected_genres)
 
-    with tab_taste:
+    elif section == "Taste":
         st.subheader("Taste")
 
         genre_summary = (
@@ -1328,7 +1331,7 @@ def main() -> None:
                 use_container_width=True,
             )
 
-    with tab_gaps:
+    elif section == "Outliers":
         st.subheader("Outliers")
 
         gap_df = selected.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
@@ -1373,7 +1376,7 @@ def main() -> None:
                 height=300,
             )
 
-    with tab_explorer:
+    elif section == "Explorer":
         st.subheader("Explorer")
 
         sort_options = {
@@ -1429,7 +1432,7 @@ def main() -> None:
         with st.expander("Full table"):
             compact_table(table_df, explorer_cols, height=640)
 
-    with tab_agent:
+    elif section == "Agent":
         render_agent(selected, selected_genres, active_filters, df, exploded)
 
 
