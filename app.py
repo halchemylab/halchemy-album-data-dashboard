@@ -53,7 +53,7 @@ AGENT_IDLE_SECONDS = 10
 
 st.set_page_config(
     page_title="Halchemy Album Dashboard",
-    page_icon=":notes:",
+    page_icon="🎧",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -1030,7 +1030,7 @@ def main() -> None:
 
     selected, selected_genres, active_filters = filtered_data(df, exploded)
 
-    st.title("Halchemy Album Dashboard")
+    st.title("🎧 Halchemy Album Dashboard")
     st.caption(
         "Start with the catalog, follow the taste patterns, then drill into the albums worth inspecting."
     )
