@@ -40,6 +40,7 @@ FILTER_STATUSES_KEY = "filter_statuses"
 FILTER_YEAR_RANGE_KEY = "filter_year_range"
 EXPLORER_ALBUM_KEY = "explorer_album_key"
 AGENT_QUESTION_KEY = "agent_question"
+AGENT_PENDING_QUESTION_KEY = "agent_pending_question"
 AGENT_HISTORY_KEY = "agent_history"
 AGENT_CONTEXT_KEY = "agent_context"
 AGENT_PIN_CONTEXT_KEY = "agent_pin_context"
@@ -466,8 +467,7 @@ def render_followup_buttons(answer: AgentAnswer | None = None) -> None:
     cols = st.columns(len(followups))
     for col, followup in zip(cols, followups):
         if col.button(followup, use_container_width=True):
-            mark_agent_interaction()
-            st.session_state[AGENT_QUESTION_KEY] = followup
+            queue_agent_followup(followup, run_immediately=True)
 
 
 def render_agent_trace(answer: AgentAnswer) -> None:
@@ -483,7 +483,12 @@ def mark_agent_interaction() -> None:
     st.session_state[AGENT_LAST_INTERACTION_KEY] = time.time()
 
 
-def queue_agent_followup(question: str, selected_album: dict[str, object] | None = None) -> None:
+def queue_agent_followup(
+    question: str,
+    selected_album: dict[str, object] | None = None,
+    *,
+    run_immediately: bool = False,
+) -> None:
     mark_agent_interaction()
     if selected_album:
         st.session_state[AGENT_CONTEXT_KEY] = {
@@ -494,6 +499,8 @@ def queue_agent_followup(question: str, selected_album: dict[str, object] | None
             "selected_album": selected_album,
         }
     st.session_state[AGENT_QUESTION_KEY] = question
+    if run_immediately:
+        st.session_state[AGENT_PENDING_QUESTION_KEY] = question
     st.rerun()
 
 
@@ -772,12 +779,15 @@ def render_agent(
         )
         submitted = st.form_submit_button("Ask agent", use_container_width=True)
 
-    if submitted and question.strip():
+    pending_question = st.session_state.pop(AGENT_PENDING_QUESTION_KEY, None)
+    question_to_answer = str(pending_question or question).strip()
+
+    if (submitted or pending_question) and question_to_answer:
         mark_agent_interaction()
         try:
             if use_openai:
                 answer = answer_question_with_openai(
-                    question,
+                    question_to_answer,
                     selected,
                     selected_genres,
                     api_key=str(api_key),
@@ -789,7 +799,7 @@ def render_agent(
                 )
             else:
                 answer = answer_question(
-                    question,
+                    question_to_answer,
                     selected,
                     selected_genres,
                     context=st.session_state.get(AGENT_CONTEXT_KEY),
@@ -799,7 +809,7 @@ def render_agent(
                 )
         except Exception as exc:
             fallback = answer_question(
-                question,
+                question_to_answer,
                 selected,
                 selected_genres,
                 context=st.session_state.get(AGENT_CONTEXT_KEY),
