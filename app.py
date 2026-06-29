@@ -171,23 +171,20 @@ def active_filter_labels(
     return labels
 
 
-def render_active_filters(labels: list[str], year_min: int, year_max: int) -> None:
-    left, right = st.columns([0.82, 0.18], vertical_alignment="center")
-    with left:
-        st.markdown("**Active Filters**")
-        if labels:
-            chips = " ".join(f"<span class='filter-chip'>{escape(label)}</span>" for label in labels)
-            st.markdown(f"<div class='filter-strip'>{chips}</div>", unsafe_allow_html=True)
-        else:
-            st.caption("All albums are included.")
-    with right:
-        st.button(
-            "Clear filters",
-            disabled=not labels,
-            use_container_width=True,
-            on_click=reset_filter_state,
-            args=(year_min, year_max),
-        )
+def render_active_filters(labels: list[str], year_min: int, year_max: int, container=st.sidebar) -> None:
+    container.markdown("### Filters")
+    if labels:
+        chips = " ".join(f"<span class='filter-chip'>{escape(label)}</span>" for label in labels)
+        container.markdown(f"<div class='filter-strip'>{chips}</div>", unsafe_allow_html=True)
+    else:
+        container.caption("All albums are included.")
+    container.button(
+        "Clear filters",
+        disabled=not labels,
+        use_container_width=True,
+        on_click=reset_filter_state,
+        args=(year_min, year_max),
+    )
 
 
 def render_rating_key(statuses: pd.Series) -> None:
@@ -968,7 +965,7 @@ def render_soundprint(selected: pd.DataFrame, selected_genres: pd.DataFrame) -> 
 
 
 def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    st.sidebar.markdown("### Filters")
+    active_filter_container = st.sidebar.container()
 
     year_min, year_max = int(df["Released"].min()), int(df["Released"].max())
     ensure_filter_defaults(year_min, year_max)
@@ -1017,6 +1014,7 @@ def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFram
         year_range=year_range,
         full_year_range=(year_min, year_max),
     )
+    render_active_filters(labels, year_min, year_max, active_filter_container)
     return selected, exploded.loc[exploded_keys.isin(selected_keys)].copy(), labels
 
 
@@ -1139,11 +1137,8 @@ def main() -> None:
     )
 
     if selected.empty:
-        render_active_filters(active_filters, int(df["Released"].min()), int(df["Released"].max()))
         st.warning("No albums match the current filters.")
         return
-
-    render_active_filters(active_filters, int(df["Released"].min()), int(df["Released"].max()))
 
     rated = selected["RatingNum"].dropna()
     c1, c2, c3, c4, c5 = st.columns(5)
