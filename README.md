@@ -17,7 +17,7 @@ The app is CSV-first. Add more rows to `albums.csv`, rerun Streamlit, and the da
 
 ## Assistant
 
-The sidebar Assistant can run in two modes:
+The sidebar Assistant automatically chooses between two modes:
 
 - **Local fallback mode**: rule-based routing chooses a skill without calling OpenAI. This keeps demos and tests reliable.
 - **OpenAI skill router mode**: OpenAI chooses the best skill/tool for the question, the app runs that skill against the filtered DataFrame, and OpenAI writes the final explanation from the tool result.
@@ -56,6 +56,8 @@ Or create `.streamlit/secrets.toml`:
 ```toml
 OPENAI_API_KEY = "your_api_key_here"
 OPENAI_MODEL = "gpt-5.5"
+# Optional: show assistant internals in the sidebar.
+SHOW_ASSISTANT_DEBUG = "1"
 ```
 
 The secrets file is ignored by git.

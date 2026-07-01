@@ -44,7 +44,6 @@ AGENT_PENDING_QUESTION_KEY = "agent_pending_question"
 AGENT_HISTORY_KEY = "agent_history"
 AGENT_CONTEXT_KEY = "agent_context"
 AGENT_PIN_CONTEXT_KEY = "agent_pin_context"
-AGENT_SIDEBAR_DETAILS_KEY = "agent_sidebar_details"
 AGENT_ACTIVE_NUDGE_KEY = "agent_active_nudge"
 AGENT_LAST_INTERACTION_KEY = "agent_last_interaction_at"
 AGENT_IDLE_SIGNATURE_KEY = "agent_idle_signature"
@@ -71,6 +70,14 @@ def optional_secret(name: str, default: str = "") -> str:
         return str(st.secrets.get(name, default))
     except Exception:
         return default
+
+
+def truthy_setting(value: str) -> bool:
+    return value.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def assistant_debug_enabled() -> bool:
+    return truthy_setting(os.getenv("SHOW_ASSISTANT_DEBUG") or optional_secret("SHOW_ASSISTANT_DEBUG"))
 
 
 def compact_table(data: pd.DataFrame, cols: list[str], height: int = 330) -> None:
@@ -1042,8 +1049,8 @@ def current_filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.
 def render_sidebar_answer(answer: AgentAnswer) -> None:
     st.sidebar.markdown(f"**You:** {escape(answer.question)}")
     st.sidebar.write(answer.summary)
-    st.sidebar.caption(f"Skill: {answer.skill} | Mode: {answer.mode}")
-    if st.session_state.get(AGENT_SIDEBAR_DETAILS_KEY):
+    if assistant_debug_enabled():
+        st.sidebar.caption(f"Skill: {answer.skill} | Mode: {answer.mode}")
         render_agent_trace(answer)
         if answer.skill == "listening_mission":
             render_mission_answer(answer, 0)
@@ -1065,6 +1072,9 @@ def render_sidebar_assistant(
     st.session_state.setdefault(AGENT_CONTEXT_KEY, None)
     st.session_state.setdefault(AGENT_PIN_CONTEXT_KEY, False)
     memory = ensure_agent_memory(full_catalog, full_genres)
+    api_key = os.getenv("OPENAI_API_KEY") or optional_secret("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL") or optional_secret("OPENAI_MODEL", "gpt-5.5")
+    use_openai = bool(api_key)
 
     st.sidebar.markdown("### Assistant")
     st.sidebar.caption("Ask a question. The dashboard can answer or update itself.")
@@ -1078,18 +1088,20 @@ def render_sidebar_assistant(
         )
         submitted = st.form_submit_button("Ask", use_container_width=True)
 
-    with st.sidebar.expander("Assistant settings", expanded=False):
-        render_agent_context_controls()
-        use_openai, api_key, model = render_agent_router_controls()
-        refresh_memory = st.button("Refresh durable memory", use_container_width=True)
-        if refresh_memory:
-            mark_agent_interaction()
-            memory = build_agent_memory(full_catalog, full_genres)
-            save_agent_memory(memory)
-            st.rerun()
-        st.checkbox("Show answer details", key=AGENT_SIDEBAR_DETAILS_KEY)
-        render_agent_scope(selected, selected_genres, active_filters)
-        render_agent_memory(memory)
+    if assistant_debug_enabled():
+        with st.sidebar.expander("Assistant debug", expanded=False):
+            render_agent_context_controls()
+            st.caption(f"Router: {'OpenAI' if use_openai else 'local fallback'}")
+            if not api_key:
+                st.caption("Set OPENAI_API_KEY to enable OpenAI routing.")
+            refresh_memory = st.button("Refresh durable memory", use_container_width=True)
+            if refresh_memory:
+                mark_agent_interaction()
+                memory = build_agent_memory(full_catalog, full_genres)
+                save_agent_memory(memory)
+                st.rerun()
+            render_agent_scope(selected, selected_genres, active_filters)
+            render_agent_memory(memory)
 
     pending_question = st.session_state.pop(AGENT_PENDING_QUESTION_KEY, None)
     question_to_answer = str(pending_question or question).strip()
