@@ -334,15 +334,29 @@ def _extract_genre(question: str, exploded: pd.DataFrame) -> str | None:
     lowered = question.lower()
     genres = sorted(exploded["Genre"].dropna().unique(), key=lambda value: len(str(value)), reverse=True)
     for genre in genres:
-        if str(genre).lower() in lowered:
+        if str(genre).lower() in lowered or _loose_text(str(genre)) in _loose_text(question):
             return str(genre)
     return None
+
+
+def _loose_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def _short_decade_to_full(value: str) -> str:
+    decade = int(value)
+    if decade >= 50:
+        return f"19{decade:02d}s"
+    return f"20{decade:02d}s"
 
 
 def _extract_decade(question: str) -> str | None:
     match = re.search(r"\b(19|20)\d0s\b", question.lower())
     if match:
         return match.group(0)
+    short_match = re.search(r"\b([0-9]0)'?s\b", question.lower())
+    if short_match:
+        return _short_decade_to_full(short_match.group(1))
     year_match = re.search(r"\b((19|20)\d{2})\b", question)
     if year_match:
         year = int(year_match.group(1))
@@ -373,6 +387,8 @@ def _extract_count(question: str, default: int = 3, minimum: int = 2, maximum: i
 def _extract_decades(question: str, df: pd.DataFrame) -> list[str]:
     valid_decades = sorted(str(value) for value in df["Decade"].dropna().unique()) if "Decade" in df.columns else []
     found = {match.group(0) for match in re.finditer(r"\b(?:19|20)\d0s\b", question.lower())}
+    for match in re.finditer(r"\b([0-9]0)'?s\b", question.lower()):
+        found.add(_short_decade_to_full(match.group(1)))
     for match in re.finditer(r"\b((?:19|20)\d{2})\b", question):
         year = int(match.group(1))
         found.add(f"{year // 10 * 10}s")
@@ -381,9 +397,14 @@ def _extract_decades(question: str, df: pd.DataFrame) -> list[str]:
 
 def _extract_filter_values(question: str, values: list[object]) -> list[str]:
     lowered = question.lower()
+    loose_lowered = _loose_text(question)
     matches: list[str] = []
     for value in sorted({str(item) for item in values if str(item).strip()}, key=len, reverse=True):
-        if re.search(rf"(?<!\w){re.escape(value.lower())}(?!\w)", lowered):
+        loose_value = _loose_text(value)
+        if re.search(rf"(?<!\w){re.escape(value.lower())}(?!\w)", lowered) or re.search(
+            rf"(?<!\w){re.escape(loose_value)}(?!\w)",
+            loose_lowered,
+        ):
             matches.append(value)
     return matches
 
@@ -1673,11 +1694,12 @@ def choose_skill(question: str) -> str:
         "pop",
         "jazz",
         "hip-hop",
+        "hip hop",
         "folk",
         "soul",
     ]
     if any(verb in lowered for verb in filter_verbs) and (
-        any(term in lowered for term in filter_terms) or re.search(r"\b(?:19|20)\d0s\b", lowered)
+        any(term in lowered for term in filter_terms) or re.search(r"\b(?:19|20)?\d0'?s\b", lowered)
     ):
         return "set_dashboard_filters"
     if any(
@@ -1713,7 +1735,7 @@ def choose_skill(question: str) -> str:
         return "recommendations"
     if any(word in lowered for word in ["gap", "consensus", "overrated", "underrated", "global"]):
         return "taste_gaps"
-    if "genre" in lowered or any(word in lowered for word in ["rock", "pop", "jazz", "hip-hop", "folk", "soul"]):
+    if "genre" in lowered or any(word in lowered for word in ["rock", "pop", "jazz", "hip-hop", "hip hop", "folk", "soul"]):
         return "genre_analysis"
     if any(word in lowered for word in ["note", "notes", "mention", "find"]):
         return "notes_search"

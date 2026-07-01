@@ -14,7 +14,14 @@ try:
 except ImportError:
     st_autorefresh = None
 
-from album_agent import AgentAnswer, ProactivePrompt, answer_question, answer_question_with_openai, build_proactive_prompt
+from album_agent import (
+    AgentAnswer,
+    ProactivePrompt,
+    answer_question,
+    answer_question_with_openai,
+    build_proactive_prompt,
+    choose_skill,
+)
 from album_data import AlbumDataError, RATING_LABEL_MAP, RATING_ORDER, load_data, notes_keywords
 from album_memory import build_agent_memory, ensure_agent_memory, save_agent_memory
 from album_missions import add_mission, load_missions
@@ -743,6 +750,17 @@ def run_agent_turn(
     model: str,
 ) -> AgentAnswer:
     try:
+        skill_name = choose_skill(question)
+        if skill_name in {"set_dashboard_filters", "dashboard_walkthrough"}:
+            return answer_question(
+                question,
+                selected,
+                selected_genres,
+                context=st.session_state.get(AGENT_CONTEXT_KEY),
+                memory=memory,
+                filter_df=full_catalog,
+                filter_exploded=full_genres,
+            )
         if use_openai:
             return answer_question_with_openai(
                 question,

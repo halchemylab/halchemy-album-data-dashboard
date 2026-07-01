@@ -265,6 +265,19 @@ def test_answer_question_can_request_dashboard_filter_action(tmp_path: Path) -> 
     assert filters["statuses"] == ["unrated"]
 
 
+def test_answer_question_filters_short_decade_and_loose_genre_alias(tmp_path: Path) -> None:
+    df, exploded = sample_data(tmp_path)
+
+    answer = answer_question("filter for 90s hip hop", df, exploded, filter_df=df, filter_exploded=exploded)
+
+    assert choose_skill("filter for 90s hip hop") == "set_dashboard_filters"
+    assert answer.skill == "set_dashboard_filters"
+    assert answer.dashboard_action is not None
+    filters = answer.dashboard_action["filters"]
+    assert filters["genres"] == ["hip-hop"]
+    assert filters["decades"] == ["1990s"]
+
+
 def test_answer_question_can_request_filter_reset(tmp_path: Path) -> None:
     df, exploded = sample_data(tmp_path)
 
