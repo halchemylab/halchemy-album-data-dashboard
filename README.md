@@ -39,7 +39,7 @@ Supported skills:
 
 The Assistant renders mission and hypothesis answers as action-oriented blocks instead of plain tables when answer details are enabled. Mission results can be saved locally to `listening_missions.json`, which is ignored by git. Album rows returned by the agent include quick actions for similar albums, explanations, and mission creation.
 
-The Assistant can also speak first. After a short idle period, it builds a contextual nudge from the current dashboard slice, such as an unresolved high-signal album, a strong repeated genre pattern, or a sharp consensus disagreement. The prompt includes action buttons and is suppressed after the user acts on or dismisses it, so it behaves like a useful assistant rather than a repeating greeting.
+The Assistant can also speak first. After one minute of inactivity, it can add a single conversational nudge from the current dashboard slice, such as an unresolved high-signal album, a strong repeated genre pattern, or a sharp consensus disagreement. The nudge is suppressed after it appears, so it behaves like a useful assistant rather than a repeating greeting.
 
 The Explorer tab also includes an album assistant panel for the selected album. It highlights how the album sits against personal/global ratings, finds a nearby liked album and unresolved match, and can seed the sidebar Assistant with contextual follow-up prompts.
 

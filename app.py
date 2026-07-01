@@ -45,11 +45,12 @@ AGENT_HISTORY_KEY = "agent_history"
 AGENT_CONTEXT_KEY = "agent_context"
 AGENT_PIN_CONTEXT_KEY = "agent_pin_context"
 AGENT_SIDEBAR_DETAILS_KEY = "agent_sidebar_details"
+AGENT_ACTIVE_NUDGE_KEY = "agent_active_nudge"
 AGENT_LAST_INTERACTION_KEY = "agent_last_interaction_at"
 AGENT_IDLE_SIGNATURE_KEY = "agent_idle_signature"
 AGENT_PROACTIVE_SEEN_KEY = "agent_proactive_seen"
 AGENT_PROACTIVE_MUTED_KEY = "agent_proactive_muted"
-AGENT_IDLE_SECONDS = 10
+AGENT_IDLE_SECONDS = 60
 
 
 st.set_page_config(
@@ -479,6 +480,7 @@ def render_agent_trace(answer: AgentAnswer) -> None:
 
 def mark_agent_interaction() -> None:
     st.session_state[AGENT_LAST_INTERACTION_KEY] = time.time()
+    st.session_state.pop(AGENT_ACTIVE_NUDGE_KEY, None)
 
 
 def queue_agent_followup(
@@ -510,29 +512,8 @@ def proactive_signature(selected: pd.DataFrame, selected_genres: pd.DataFrame, a
 
 
 def render_proactive_prompt(prompt: ProactivePrompt) -> None:
-    st.markdown("**Assistant nudge**")
-    st.info(prompt.message)
-    if prompt.reason:
-        with st.expander("Why this nudge?", expanded=False):
-            st.caption(prompt.reason)
-    cols = st.columns(len(prompt.actions) + 2)
-    for index, action in enumerate(prompt.actions):
-        if cols[index].button(action, key=f"proactive_action_{prompt.key}_{index}", use_container_width=True):
-            seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
-            st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
-            queue_agent_followup(action)
-    if cols[-2].button("Less like this", key=f"proactive_mute_{prompt.key}", use_container_width=True):
-        seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
-        muted = list(st.session_state.get(AGENT_PROACTIVE_MUTED_KEY, []))
-        st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
-        st.session_state[AGENT_PROACTIVE_MUTED_KEY] = sorted(set([*muted, prompt.category]))
-        mark_agent_interaction()
-        st.rerun()
-    if cols[-1].button("Not now", key=f"proactive_dismiss_{prompt.key}", use_container_width=True):
-        seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
-        st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
-        mark_agent_interaction()
-        st.rerun()
+    with st.chat_message("assistant"):
+        st.write(prompt.message)
 
 
 def render_idle_agent_nudge(
@@ -545,9 +526,25 @@ def render_idle_agent_nudge(
     if st.session_state.get(AGENT_IDLE_SIGNATURE_KEY) != signature:
         st.session_state[AGENT_IDLE_SIGNATURE_KEY] = signature
         st.session_state[AGENT_LAST_INTERACTION_KEY] = time.time()
+        st.session_state.pop(AGENT_ACTIVE_NUDGE_KEY, None)
     st.session_state.setdefault(AGENT_LAST_INTERACTION_KEY, time.time())
     st.session_state.setdefault(AGENT_PROACTIVE_SEEN_KEY, [])
     st.session_state.setdefault(AGENT_PROACTIVE_MUTED_KEY, [])
+
+    active_nudge = st.session_state.get(AGENT_ACTIVE_NUDGE_KEY)
+    if isinstance(active_nudge, dict) and active_nudge.get("signature") == signature:
+        message = str(active_nudge.get("message", "")).strip()
+        if message:
+            render_proactive_prompt(
+                ProactivePrompt(
+                    key=str(active_nudge.get("key", "")),
+                    message=message,
+                    actions=(),
+                    reason="",
+                    category=str(active_nudge.get("category", "")),
+                )
+            )
+        return
 
     prompt = build_proactive_prompt(
         selected,
@@ -568,9 +565,17 @@ def render_idle_agent_nudge(
         if st_autorefresh is not None:
             st_autorefresh(interval=1000, limit=AGENT_IDLE_SECONDS + 1, key=f"agent_idle_refresh_{signature}")
         else:
-            st.caption("The assistant can surface a nudge after a short pause when streamlit-autorefresh is installed.")
+            st.caption("The assistant can surface a nudge after one minute when streamlit-autorefresh is installed.")
         return
 
+    seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
+    st.session_state[AGENT_PROACTIVE_SEEN_KEY] = sorted(set([*seen, prompt.key]))
+    st.session_state[AGENT_ACTIVE_NUDGE_KEY] = {
+        "key": prompt.key,
+        "message": prompt.message,
+        "category": prompt.category,
+        "signature": signature,
+    }
     render_proactive_prompt(prompt)
 
 
