@@ -473,7 +473,7 @@ def render_followup_buttons(answer: AgentAnswer | None = None) -> None:
     cols = st.columns(len(followups))
     for col, followup in zip(cols, followups):
         if col.button(followup, use_container_width=True):
-            queue_agent_followup(followup, run_immediately=True)
+            queue_agent_followup(followup)
 
 
 def render_agent_trace(answer: AgentAnswer) -> None:
@@ -493,8 +493,6 @@ def mark_agent_interaction() -> None:
 def queue_agent_followup(
     question: str,
     selected_album: dict[str, object] | None = None,
-    *,
-    run_immediately: bool = False,
 ) -> None:
     mark_agent_interaction()
     if selected_album:
@@ -505,9 +503,7 @@ def queue_agent_followup(
             "last_rows": [selected_album],
             "selected_album": selected_album,
         }
-    st.session_state[AGENT_QUESTION_KEY] = question
-    if run_immediately:
-        st.session_state[AGENT_PENDING_QUESTION_KEY] = question
+    st.session_state[AGENT_PENDING_QUESTION_KEY] = question
     st.rerun()
 
 
@@ -1130,7 +1126,8 @@ def render_sidebar_assistant(
     else:
         with st.sidebar:
             render_sidebar_answer(latest_answer)
-            render_followup_buttons(latest_answer)
+            if assistant_debug_enabled():
+                render_followup_buttons(latest_answer)
     with st.sidebar:
         render_saved_missions()
     st.sidebar.divider()
