@@ -2,7 +2,7 @@
 
 A Streamlit dashboard for exploring `albums.csv`: ratings, genres, eras, notes, and personal-vs-global taste gaps.
 
-The dashboard also includes an **Album Agent** tab. It is a skill-based data agent: the chat interface sends questions to an agent layer, the agent chooses an album-analysis skill, the skill runs deterministic pandas analysis over the currently filtered data, and the answer is summarized back in the UI.
+The dashboard also includes a sidebar **Assistant**. It is a skill-based data agent: the chat interface sends questions to an agent layer, the agent chooses an album-analysis skill, the skill runs deterministic pandas analysis over the currently filtered data, and the answer is summarized back in the UI. When the answer includes a dashboard action, the assistant applies the relevant filters automatically.
 
 Agentic features include natural-language recommendations, genre and taste-gap analysis, notes search, durable taste memory, follow-up context, one-page taste reports, slide-style story insights, guided dashboard walkthroughs that can apply filters for you, listening missions, and data-backed taste hypotheses.
 
@@ -15,9 +15,9 @@ streamlit run app.py
 
 The app is CSV-first. Add more rows to `albums.csv`, rerun Streamlit, and the dashboard will recalculate filters, charts, and tables.
 
-## Album Agent
+## Assistant
 
-The Agent tab can run in two modes:
+The sidebar Assistant can run in two modes:
 
 - **Local fallback mode**: rule-based routing chooses a skill without calling OpenAI. This keeps demos and tests reliable.
 - **OpenAI skill router mode**: OpenAI chooses the best skill/tool for the question, the app runs that skill against the filtered DataFrame, and OpenAI writes the final explanation from the tool result.
@@ -37,11 +37,11 @@ Supported skills:
 | `story_insights` | Capstone-ready narrative insights, one-page taste reports, listener profiles, and slide outlines backed by data |
 | `dashboard_walkthrough` | Applies dashboard filters and gives a step-by-step analysis path through the relevant tabs |
 
-The Agent tab renders mission and hypothesis answers as action-oriented blocks instead of plain tables. Mission results can be saved locally to `listening_missions.json`, which is ignored by git. Album rows returned by the agent include quick actions for similar albums, explanations, and mission creation.
+The Assistant renders mission and hypothesis answers as action-oriented blocks instead of plain tables when answer details are enabled. Mission results can be saved locally to `listening_missions.json`, which is ignored by git. Album rows returned by the agent include quick actions for similar albums, explanations, and mission creation.
 
-The Agent tab can also speak first. After a short idle period, it builds a contextual nudge from the current dashboard slice, such as an unresolved high-signal album, a strong repeated genre pattern, or a sharp consensus disagreement. The prompt includes action buttons and is suppressed after the user acts on or dismisses it, so it behaves like a useful assistant rather than a repeating greeting.
+The Assistant can also speak first. After a short idle period, it builds a contextual nudge from the current dashboard slice, such as an unresolved high-signal album, a strong repeated genre pattern, or a sharp consensus disagreement. The prompt includes action buttons and is suppressed after the user acts on or dismisses it, so it behaves like a useful assistant rather than a repeating greeting.
 
-The Explorer tab also includes an album assistant panel for the selected album. It highlights how the album sits against personal/global ratings, finds a nearby liked album and unresolved match, and can seed the Agent tab with contextual follow-up prompts.
+The Explorer tab also includes an album assistant panel for the selected album. It highlights how the album sits against personal/global ratings, finds a nearby liked album and unresolved match, and can seed the sidebar Assistant with contextual follow-up prompts.
 
 To enable OpenAI mode, set your key before running Streamlit:
 
@@ -60,7 +60,7 @@ OPENAI_MODEL = "gpt-5.5"
 
 The secrets file is ignored by git.
 
-The Agent tab also keeps a local `agent_memory.json` file with durable taste signals derived from the full catalog: favorite genres, reliable artists, consensus gaps, note keywords, and unresolved albums. The file is regenerated when the catalog changes and is ignored by git.
+The Assistant also keeps a local `agent_memory.json` file with durable taste signals derived from the full catalog: favorite genres, reliable artists, consensus gaps, note keywords, and unresolved albums. The file is regenerated when the catalog changes and is ignored by git.
 
 ## CSV schema
 

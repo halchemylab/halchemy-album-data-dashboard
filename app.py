@@ -44,6 +44,7 @@ AGENT_PENDING_QUESTION_KEY = "agent_pending_question"
 AGENT_HISTORY_KEY = "agent_history"
 AGENT_CONTEXT_KEY = "agent_context"
 AGENT_PIN_CONTEXT_KEY = "agent_pin_context"
+AGENT_SIDEBAR_DETAILS_KEY = "agent_sidebar_details"
 AGENT_LAST_INTERACTION_KEY = "agent_last_interaction_at"
 AGENT_IDLE_SIGNATURE_KEY = "agent_idle_signature"
 AGENT_PROACTIVE_SEEN_KEY = "agent_proactive_seen"
@@ -721,6 +722,71 @@ def render_agent_router_controls() -> tuple[bool, str | None, str]:
     return use_openai, api_key, model
 
 
+def run_agent_turn(
+    question: str,
+    selected: pd.DataFrame,
+    selected_genres: pd.DataFrame,
+    full_catalog: pd.DataFrame,
+    full_genres: pd.DataFrame,
+    memory: dict[str, object],
+    *,
+    use_openai: bool,
+    api_key: str | None,
+    model: str,
+) -> AgentAnswer:
+    try:
+        if use_openai:
+            return answer_question_with_openai(
+                question,
+                selected,
+                selected_genres,
+                api_key=str(api_key),
+                model=str(model),
+                context=st.session_state.get(AGENT_CONTEXT_KEY),
+                memory=memory,
+                filter_df=full_catalog,
+                filter_exploded=full_genres,
+            )
+        return answer_question(
+            question,
+            selected,
+            selected_genres,
+            context=st.session_state.get(AGENT_CONTEXT_KEY),
+            memory=memory,
+            filter_df=full_catalog,
+            filter_exploded=full_genres,
+        )
+    except Exception as exc:
+        fallback = answer_question(
+            question,
+            selected,
+            selected_genres,
+            context=st.session_state.get(AGENT_CONTEXT_KEY),
+            memory=memory,
+            filter_df=full_catalog,
+            filter_exploded=full_genres,
+        )
+        return fallback.__class__(
+            question=fallback.question,
+            summary=(
+                f"{fallback.summary}\n\n"
+                f"OpenAI routing was unavailable, so this answer used the local skill router. Error: {exc}"
+            ),
+            detail=fallback.detail,
+            skill=fallback.skill,
+            mode="deterministic fallback",
+            trace=fallback.trace,
+            dashboard_action=fallback.dashboard_action,
+        )
+
+
+def save_agent_turn(answer: AgentAnswer) -> None:
+    st.session_state[AGENT_HISTORY_KEY].insert(0, answer)
+    st.session_state[AGENT_HISTORY_KEY] = st.session_state[AGENT_HISTORY_KEY][:6]
+    if not st.session_state.get(AGENT_PIN_CONTEXT_KEY):
+        st.session_state[AGENT_CONTEXT_KEY] = make_agent_context(answer)
+
+
 def render_agent(
     selected: pd.DataFrame,
     selected_genres: pd.DataFrame,
@@ -781,52 +847,18 @@ def render_agent(
 
     if (submitted or pending_question) and question_to_answer:
         mark_agent_interaction()
-        try:
-            if use_openai:
-                answer = answer_question_with_openai(
-                    question_to_answer,
-                    selected,
-                    selected_genres,
-                    api_key=str(api_key),
-                    model=str(model),
-                    context=st.session_state.get(AGENT_CONTEXT_KEY),
-                    memory=memory,
-                    filter_df=full_catalog,
-                    filter_exploded=full_genres,
-                )
-            else:
-                answer = answer_question(
-                    question_to_answer,
-                    selected,
-                    selected_genres,
-                    context=st.session_state.get(AGENT_CONTEXT_KEY),
-                    memory=memory,
-                    filter_df=full_catalog,
-                    filter_exploded=full_genres,
-                )
-        except Exception as exc:
-            fallback = answer_question(
-                question_to_answer,
-                selected,
-                selected_genres,
-                context=st.session_state.get(AGENT_CONTEXT_KEY),
-                memory=memory,
-                filter_df=full_catalog,
-                filter_exploded=full_genres,
-            )
-            answer = fallback.__class__(
-                question=fallback.question,
-                summary=f"{fallback.summary}\n\nOpenAI routing was unavailable, so this answer used the local skill router. Error: {exc}",
-                detail=fallback.detail,
-                skill=fallback.skill,
-                mode="deterministic fallback",
-                trace=fallback.trace,
-                dashboard_action=fallback.dashboard_action,
-            )
-        st.session_state[AGENT_HISTORY_KEY].insert(0, answer)
-        st.session_state[AGENT_HISTORY_KEY] = st.session_state[AGENT_HISTORY_KEY][:6]
-        if not st.session_state.get(AGENT_PIN_CONTEXT_KEY):
-            st.session_state[AGENT_CONTEXT_KEY] = make_agent_context(answer)
+        answer = run_agent_turn(
+            question_to_answer,
+            selected,
+            selected_genres,
+            full_catalog,
+            full_genres,
+            memory,
+            use_openai=use_openai,
+            api_key=api_key,
+            model=model,
+        )
+        save_agent_turn(answer)
         if apply_agent_dashboard_action(answer, full_catalog, full_genres):
             st.rerun()
 
@@ -964,18 +996,139 @@ def render_soundprint(selected: pd.DataFrame, selected_genres: pd.DataFrame) -> 
             )
 
 
+def current_filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    year_min, year_max = int(df["Released"].min()), int(df["Released"].max())
+    query = str(st.session_state.get(FILTER_SEARCH_KEY, "")).strip().lower()
+    genres = list(st.session_state.get(FILTER_GENRES_KEY, []))
+    origins = list(st.session_state.get(FILTER_ORIGINS_KEY, []))
+    decades = list(st.session_state.get(FILTER_DECADES_KEY, []))
+    statuses = list(st.session_state.get(FILTER_STATUSES_KEY, []))
+    year_range = tuple(st.session_state.get(FILTER_YEAR_RANGE_KEY, (year_min, year_max)))
+    mask = df["Released"].between(year_range[0], year_range[1])
+    if query:
+        mask &= df["SearchText"].str.contains(query, regex=False, na=False)
+    if genres:
+        album_keys = exploded.loc[exploded["Genre"].isin(genres), ["Artist", "Album", "Released"]].drop_duplicates()
+        key = pd.MultiIndex.from_frame(album_keys)
+        own_key = pd.MultiIndex.from_frame(df[["Artist", "Album", "Released"]])
+        mask &= own_key.isin(key)
+    if origins:
+        mask &= df["OriginLabel"].isin(origins)
+    if decades:
+        mask &= df["Decade"].isin(decades)
+    if statuses:
+        mask &= df["RatingStatus"].isin(statuses)
+
+    selected = df.loc[mask].copy()
+    selected_keys = pd.MultiIndex.from_frame(selected[["Artist", "Album", "Released"]])
+    exploded_keys = pd.MultiIndex.from_frame(exploded[["Artist", "Album", "Released"]])
+    labels = active_filter_labels(
+        query=query,
+        genres=genres,
+        origins=origins,
+        decades=decades,
+        statuses=statuses,
+        year_range=year_range,
+        full_year_range=(year_min, year_max),
+    )
+    return selected, exploded.loc[exploded_keys.isin(selected_keys)].copy(), labels
+
+
+def render_sidebar_answer(answer: AgentAnswer) -> None:
+    st.sidebar.markdown(f"**You:** {escape(answer.question)}")
+    st.sidebar.write(answer.summary)
+    st.sidebar.caption(f"Skill: {answer.skill} | Mode: {answer.mode}")
+    if st.session_state.get(AGENT_SIDEBAR_DETAILS_KEY):
+        render_agent_trace(answer)
+        if answer.skill == "listening_mission":
+            render_mission_answer(answer, 0)
+        elif answer.skill == "taste_hypotheses":
+            render_hypothesis_answer(answer)
+        elif not answer.detail.empty:
+            compact_table(answer.detail, answer.detail.columns.tolist(), height=220)
+        render_agent_row_actions(answer, 0)
+
+
+def render_sidebar_assistant(
+    selected: pd.DataFrame,
+    selected_genres: pd.DataFrame,
+    active_filters: list[str],
+    full_catalog: pd.DataFrame,
+    full_genres: pd.DataFrame,
+) -> None:
+    st.session_state.setdefault(AGENT_HISTORY_KEY, [])
+    st.session_state.setdefault(AGENT_CONTEXT_KEY, None)
+    st.session_state.setdefault(AGENT_PIN_CONTEXT_KEY, False)
+    memory = ensure_agent_memory(full_catalog, full_genres)
+
+    st.sidebar.markdown("### Assistant")
+    st.sidebar.caption("Ask a question. The dashboard can answer or update itself.")
+
+    with st.sidebar.form("sidebar_agent_form", clear_on_submit=False):
+        question = st.text_input(
+            "Question",
+            key=AGENT_QUESTION_KEY,
+            placeholder="Try: filter to 90s hip hop",
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("Ask", use_container_width=True)
+
+    with st.sidebar.expander("Assistant settings", expanded=False):
+        render_agent_context_controls()
+        use_openai, api_key, model = render_agent_router_controls()
+        refresh_memory = st.button("Refresh durable memory", use_container_width=True)
+        if refresh_memory:
+            mark_agent_interaction()
+            memory = build_agent_memory(full_catalog, full_genres)
+            save_agent_memory(memory)
+            st.rerun()
+        st.checkbox("Show answer details", key=AGENT_SIDEBAR_DETAILS_KEY)
+        render_agent_scope(selected, selected_genres, active_filters)
+        render_agent_memory(memory)
+
+    pending_question = st.session_state.pop(AGENT_PENDING_QUESTION_KEY, None)
+    question_to_answer = str(pending_question or question).strip()
+    if (submitted or pending_question) and question_to_answer:
+        mark_agent_interaction()
+        answer = run_agent_turn(
+            question_to_answer,
+            selected,
+            selected_genres,
+            full_catalog,
+            full_genres,
+            memory,
+            use_openai=use_openai,
+            api_key=api_key,
+            model=model,
+        )
+        save_agent_turn(answer)
+        if apply_agent_dashboard_action(answer, full_catalog, full_genres):
+            st.rerun()
+
+    with st.sidebar:
+        render_idle_agent_nudge(selected, selected_genres, active_filters, memory)
+    latest_answer = st.session_state[AGENT_HISTORY_KEY][0] if st.session_state[AGENT_HISTORY_KEY] else None
+    if latest_answer is None:
+        st.sidebar.info("Try: recommend an album, explain a pattern, or change filters.")
+    else:
+        with st.sidebar:
+            render_sidebar_answer(latest_answer)
+            render_followup_buttons(latest_answer)
+    with st.sidebar:
+        render_saved_missions()
+    st.sidebar.divider()
+
+
 def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     active_filter_container = st.sidebar.container()
 
     year_min, year_max = int(df["Released"].min()), int(df["Released"].max())
-    ensure_filter_defaults(year_min, year_max)
-
+    all_genres = sorted(exploded["Genre"].dropna().unique())
     query = st.sidebar.text_input(
         "Search",
         placeholder="artist, album, note, genre",
         key=FILTER_SEARCH_KEY,
     ).strip().lower()
-    all_genres = sorted(exploded["Genre"].dropna().unique())
     genres = st.sidebar.multiselect("Genres", all_genres, key=FILTER_GENRES_KEY)
     origins = st.sidebar.multiselect("Origin", sorted(df["OriginLabel"].dropna().unique()), key=FILTER_ORIGINS_KEY)
     decades = st.sidebar.multiselect("Decades", sorted(df["Decade"].unique()), key=FILTER_DECADES_KEY)
@@ -1028,6 +1181,10 @@ def main() -> None:
             st.write(f"- {message}")
         st.stop()
 
+    year_min, year_max = int(df["Released"].min()), int(df["Released"].max())
+    ensure_filter_defaults(year_min, year_max)
+    assistant_selected, assistant_selected_genres, assistant_filters = current_filtered_data(df, exploded)
+    render_sidebar_assistant(assistant_selected, assistant_selected_genres, assistant_filters, df, exploded)
     selected, selected_genres, active_filters = filtered_data(df, exploded)
 
     st.title("🎧 Halchemy Album Dashboard")
@@ -1156,7 +1313,7 @@ def main() -> None:
 
     section = st.segmented_control(
         "Section",
-        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer", "AI Agent"],
+        ["Catalog", "Soundprint", "Taste", "Outliers", "Explorer"],
         default="Catalog",
         label_visibility="collapsed",
     )
@@ -1431,9 +1588,6 @@ def main() -> None:
 
         with st.expander("Full table"):
             compact_table(table_df, explorer_cols, height=640)
-
-    elif section == "AI Agent":
-        render_agent(selected, selected_genres, active_filters, df, exploded)
 
 
 if __name__ == "__main__":
