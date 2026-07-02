@@ -472,11 +472,16 @@ def suggested_followups(answer: AgentAnswer | None) -> list[str]:
     ]
 
 
-def render_followup_buttons(answer: AgentAnswer | None = None) -> None:
+def render_followup_buttons(answer: AgentAnswer | None = None, *, compact: bool = False) -> None:
     if not st.session_state.get(AGENT_CONTEXT_KEY):
         return
     followups = suggested_followups(answer)
     st.markdown("**Suggested follow-ups**")
+    if compact:
+        for followup in followups:
+            if st.button(followup, use_container_width=True):
+                queue_agent_followup(followup)
+        return
     cols = st.columns(len(followups))
     for col, followup in zip(cols, followups):
         if col.button(followup, use_container_width=True):
@@ -602,11 +607,16 @@ def render_saved_missions() -> None:
             st.caption(f"{mission.get('status', 'not started')} | {mission.get('created_at', '-')}")
 
 
-def render_mission_answer(answer: AgentAnswer, answer_index: int) -> None:
+def render_mission_answer(answer: AgentAnswer, answer_index: int, *, compact: bool = False) -> None:
     if answer.detail.empty:
         return
     st.markdown("**Mission Path**")
     for _, row in answer.detail.iterrows():
+        if compact:
+            st.markdown(f"**{int(row.get('Step', 0))}. {escape(str(row.get('Role', '-')))}**")
+            st.write(f"{row.get('Artist', '-')} - {row.get('Album', '-')}")
+            st.caption(f"{row.get('Status', '-')} | {row.get('Why', '')}")
+            continue
         cols = st.columns([0.08, 0.2, 0.28, 0.16, 0.28], vertical_alignment="center")
         cols[0].metric("Step", int(row.get("Step", 0)))
         cols[1].markdown(f"**{escape(str(row.get('Role', '-')))}**")
@@ -626,20 +636,25 @@ def render_mission_answer(answer: AgentAnswer, answer_index: int) -> None:
         st.toast("Mission saved.")
 
 
-def render_hypothesis_answer(answer: AgentAnswer) -> None:
+def render_hypothesis_answer(answer: AgentAnswer, *, compact: bool = False) -> None:
     if answer.detail.empty:
         return
     st.markdown("**Taste Hypotheses**")
     for index, row in answer.detail.iterrows():
         st.markdown(f"**{index + 1}. {escape(str(row.get('Hypothesis', '-')))}**")
         st.caption(f"Confidence: {row.get('Confidence', '-')}")
+        if compact:
+            st.write(f"Evidence: {row.get('Evidence', '-')}")
+            st.write(f"Counterexample: {row.get('Counterexample', '-')}")
+            st.write(f"Next: {row.get('Action', '-')}")
+            continue
         evidence_col, counter_col, action_col = st.columns(3)
         evidence_col.write(f"Evidence: {row.get('Evidence', '-')}")
         counter_col.write(f"Counterexample: {row.get('Counterexample', '-')}")
         action_col.write(f"Next: {row.get('Action', '-')}")
 
 
-def render_agent_row_actions(answer: AgentAnswer, answer_index: int) -> None:
+def render_agent_row_actions(answer: AgentAnswer, answer_index: int, *, compact: bool = False) -> None:
     if answer.detail.empty or not {"Artist", "Album"}.issubset(answer.detail.columns):
         return
     rows = answer.detail.head(3).where(pd.notna(answer.detail.head(3)), None).to_dict(orient="records")
@@ -649,6 +664,14 @@ def render_agent_row_actions(answer: AgentAnswer, answer_index: int) -> None:
     for row_index, row in enumerate(rows):
         label = f"{row.get('Artist', '-')} - {row.get('Album', '-')}"
         st.caption(label)
+        if compact:
+            if st.button("Find similar", key=f"similar_{answer_index}_{row_index}", use_container_width=True):
+                queue_agent_followup("Show more like this", row)
+            if st.button("Explain", key=f"explain_{answer_index}_{row_index}", use_container_width=True):
+                queue_agent_followup("Why this?", row)
+            if st.button("Make mission", key=f"mission_{answer_index}_{row_index}", use_container_width=True):
+                queue_agent_followup("Create a listening mission from this album", row)
+            continue
         cols = st.columns(3)
         if cols[0].button("Find similar", key=f"similar_{answer_index}_{row_index}", use_container_width=True):
             queue_agent_followup("Show more like this", row)
@@ -1066,13 +1089,13 @@ def render_sidebar_answer(answer: AgentAnswer) -> None:
     if assistant_debug_enabled():
         st.sidebar.caption(f"Skill: {answer.skill} | Mode: {answer.mode}")
         render_agent_trace(answer)
-        if answer.skill == "listening_mission":
-            render_mission_answer(answer, 0)
-        elif answer.skill == "taste_hypotheses":
-            render_hypothesis_answer(answer)
-        elif not answer.detail.empty:
-            compact_table(answer.detail, answer.detail.columns.tolist(), height=220)
-        render_agent_row_actions(answer, 0)
+    if answer.skill == "listening_mission":
+        render_mission_answer(answer, 0, compact=True)
+    elif answer.skill == "taste_hypotheses":
+        render_hypothesis_answer(answer, compact=True)
+    elif not answer.detail.empty:
+        compact_table(answer.detail, answer.detail.columns.tolist(), height=220)
+    render_agent_row_actions(answer, 0, compact=True)
 
 
 def render_sidebar_assistant(
@@ -1144,8 +1167,7 @@ def render_sidebar_assistant(
     else:
         with st.sidebar:
             render_sidebar_answer(latest_answer)
-            if assistant_debug_enabled():
-                render_followup_buttons(latest_answer)
+            render_followup_buttons(latest_answer, compact=True)
     with st.sidebar:
         render_saved_missions()
     st.sidebar.divider()
