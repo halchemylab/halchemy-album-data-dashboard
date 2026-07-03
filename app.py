@@ -56,6 +56,7 @@ AGENT_LAST_INTERACTION_KEY = "agent_last_interaction_at"
 AGENT_IDLE_SIGNATURE_KEY = "agent_idle_signature"
 AGENT_PROACTIVE_SEEN_KEY = "agent_proactive_seen"
 AGENT_PROACTIVE_MUTED_KEY = "agent_proactive_muted"
+AGENT_ACTION_NOTICE_KEY = "agent_action_notice"
 AGENT_IDLE_SECONDS = 60
 
 
@@ -1083,19 +1084,24 @@ def current_filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.
     return selected, exploded.loc[exploded_keys.isin(selected_keys)].copy(), labels
 
 
-def render_sidebar_answer(answer: AgentAnswer) -> None:
-    st.sidebar.markdown(f"**You:** {escape(answer.question)}")
-    st.sidebar.write(answer.summary)
+def render_sidebar_answer_body(answer: AgentAnswer, answer_index: int) -> None:
+    st.write(answer.summary)
     if assistant_debug_enabled():
-        st.sidebar.caption(f"Skill: {answer.skill} | Mode: {answer.mode}")
+        st.caption(f"Skill: {answer.skill} | Mode: {answer.mode}")
         render_agent_trace(answer)
     if answer.skill == "listening_mission":
-        render_mission_answer(answer, 0, compact=True)
+        render_mission_answer(answer, answer_index, compact=True)
     elif answer.skill == "taste_hypotheses":
         render_hypothesis_answer(answer, compact=True)
     elif not answer.detail.empty:
         compact_table(answer.detail, answer.detail.columns.tolist(), height=220)
-    render_agent_row_actions(answer, 0, compact=True)
+    render_agent_row_actions(answer, answer_index, compact=True)
+
+
+def render_sidebar_answer(answer: AgentAnswer) -> None:
+    st.sidebar.markdown(f"**You:** {escape(answer.question)}")
+    with st.sidebar:
+        render_sidebar_answer_body(answer, 0)
 
 
 def render_sidebar_assistant(
@@ -1115,15 +1121,9 @@ def render_sidebar_assistant(
 
     st.sidebar.markdown("### Assistant")
     st.sidebar.caption("Ask a question. The dashboard can answer or update itself.")
-
-    with st.sidebar.form("sidebar_agent_form", clear_on_submit=False):
-        question = st.text_input(
-            "Question",
-            key=AGENT_QUESTION_KEY,
-            placeholder="Try: filter to 90s hip hop",
-            label_visibility="collapsed",
-        )
-        submitted = st.form_submit_button("Ask", use_container_width=True)
+    notice = st.session_state.pop(AGENT_ACTION_NOTICE_KEY, None)
+    if notice:
+        st.sidebar.success(str(notice))
 
     if assistant_debug_enabled():
         with st.sidebar.expander("Assistant debug", expanded=False):
@@ -1141,8 +1141,10 @@ def render_sidebar_assistant(
             render_agent_memory(memory)
 
     pending_question = st.session_state.pop(AGENT_PENDING_QUESTION_KEY, None)
-    question_to_answer = str(pending_question or question).strip()
-    if (submitted or pending_question) and question_to_answer:
+    with st.sidebar:
+        chat_question = st.chat_input("Ask about this dashboard")
+    question_to_answer = str(pending_question or chat_question or "").strip()
+    if question_to_answer:
         mark_agent_interaction()
         answer = run_agent_turn(
             question_to_answer,
@@ -1157,16 +1159,22 @@ def render_sidebar_assistant(
         )
         save_agent_turn(answer)
         if apply_agent_dashboard_action(answer, full_catalog, full_genres):
+            st.session_state[AGENT_ACTION_NOTICE_KEY] = "Updated the dashboard filters."
             st.rerun()
 
     with st.sidebar:
         render_idle_agent_nudge(selected, selected_genres, active_filters, memory)
-    latest_answer = st.session_state[AGENT_HISTORY_KEY][0] if st.session_state[AGENT_HISTORY_KEY] else None
-    if latest_answer is None:
+    history = st.session_state[AGENT_HISTORY_KEY]
+    latest_answer = history[0] if history else None
+    if not history:
         st.sidebar.info("Try: recommend an album, explain a pattern, or change filters.")
     else:
         with st.sidebar:
-            render_sidebar_answer(latest_answer)
+            for answer_index, answer in reversed(list(enumerate(history))):
+                with st.chat_message("user"):
+                    st.write(answer.question)
+                with st.chat_message("assistant"):
+                    render_sidebar_answer_body(answer, answer_index)
             render_followup_buttons(latest_answer, compact=True)
     with st.sidebar:
         render_saved_missions()
