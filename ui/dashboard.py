@@ -19,11 +19,10 @@ from agent import (
     ProactivePrompt,
     answer_question,
     answer_question_with_openai,
-    build_proactive_prompt,
     choose_skill,
 )
-from album_data import AlbumDataError, RATING_ORDER, load_data, notes_keywords
-from album_memory import build_agent_memory, ensure_agent_memory, save_agent_memory
+from album_data import AlbumDataError, RATING_ORDER, load_data
+from album_memory import build_agent_memory, save_agent_memory
 from album_missions import add_mission, load_missions
 from ui.assistant import (
     AGENT_ACTION_NOTICE_KEY,
@@ -49,6 +48,15 @@ from ui.charts import (
     polish_chart,
     render_rating_key,
 )
+from ui.derived import (
+    cached_agent_memory,
+    cached_catalog_tab_data,
+    cached_explorer_table,
+    cached_notes_keywords,
+    cached_proactive_prompt,
+    cached_taste_tab_data,
+    filtered_catalog,
+)
 from ui.filters import (
     FILTER_DECADES_KEY,
     FILTER_GENRES_KEY,
@@ -62,7 +70,6 @@ from ui.filters import (
     render_active_filters,
 )
 from ui.explorer import (
-    album_key,
     album_selector_label,
     display_number,
     display_text,
@@ -341,7 +348,15 @@ def render_idle_agent_nudge(
             )
         return
 
-    prompt = build_proactive_prompt(
+    idle_for = time.time() - float(st.session_state[AGENT_LAST_INTERACTION_KEY])
+    if idle_for < AGENT_IDLE_SECONDS:
+        if st_autorefresh is not None:
+            st_autorefresh(interval=1000, limit=AGENT_IDLE_SECONDS + 1, key=f"agent_idle_refresh_{signature}")
+        else:
+            st.caption("The assistant can surface a nudge after one minute when streamlit-autorefresh is installed.")
+        return
+
+    prompt = cached_proactive_prompt(
         selected,
         selected_genres,
         memory=memory,
@@ -353,14 +368,6 @@ def render_idle_agent_nudge(
         or prompt.key in st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, [])
         or prompt.category in muted
     ):
-        return
-
-    idle_for = time.time() - float(st.session_state[AGENT_LAST_INTERACTION_KEY])
-    if idle_for < AGENT_IDLE_SECONDS:
-        if st_autorefresh is not None:
-            st_autorefresh(interval=1000, limit=AGENT_IDLE_SECONDS + 1, key=f"agent_idle_refresh_{signature}")
-        else:
-            st.caption("The assistant can surface a nudge after one minute when streamlit-autorefresh is installed.")
         return
 
     seen = list(st.session_state.get(AGENT_PROACTIVE_SEEN_KEY, []))
@@ -626,7 +633,7 @@ def render_agent(
     st.subheader("AI Agent")
     st.caption("Ask about the currently filtered albums. The agent chooses a data skill, runs it, and explains the result.")
 
-    memory = ensure_agent_memory(full_catalog, full_genres)
+    memory = cached_agent_memory(full_catalog, full_genres)
     st.session_state.setdefault(AGENT_HISTORY_KEY, [])
     st.session_state.setdefault(AGENT_CONTEXT_KEY, None)
     st.session_state.setdefault(AGENT_PIN_CONTEXT_KEY, False)
@@ -637,6 +644,7 @@ def render_agent(
         refresh_memory = st.button("Refresh durable memory", use_container_width=False)
         if refresh_memory:
             mark_agent_interaction()
+            cached_agent_memory.clear()
             memory = build_agent_memory(full_catalog, full_genres)
             save_agent_memory(memory)
             st.rerun()
@@ -833,24 +841,16 @@ def current_filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.
     decades = list(st.session_state.get(FILTER_DECADES_KEY, []))
     statuses = list(st.session_state.get(FILTER_STATUSES_KEY, []))
     year_range = tuple(st.session_state.get(FILTER_YEAR_RANGE_KEY, (year_min, year_max)))
-    mask = df["Released"].between(year_range[0], year_range[1])
-    if query:
-        mask &= df["SearchText"].str.contains(query, regex=False, na=False)
-    if genres:
-        album_keys = exploded.loc[exploded["Genre"].isin(genres), ["Artist", "Album", "Released"]].drop_duplicates()
-        key = pd.MultiIndex.from_frame(album_keys)
-        own_key = pd.MultiIndex.from_frame(df[["Artist", "Album", "Released"]])
-        mask &= own_key.isin(key)
-    if origins:
-        mask &= df["OriginLabel"].isin(origins)
-    if decades:
-        mask &= df["Decade"].isin(decades)
-    if statuses:
-        mask &= df["RatingStatus"].isin(statuses)
-
-    selected = df.loc[mask].copy()
-    selected_keys = pd.MultiIndex.from_frame(selected[["Artist", "Album", "Released"]])
-    exploded_keys = pd.MultiIndex.from_frame(exploded[["Artist", "Album", "Released"]])
+    selected, selected_genres = filtered_catalog(
+        df,
+        exploded,
+        query=query,
+        genres=tuple(genres),
+        origins=tuple(origins),
+        decades=tuple(decades),
+        statuses=tuple(statuses),
+        year_range=(int(year_range[0]), int(year_range[1])),
+    )
     labels = active_filter_labels(
         query=query,
         genres=genres,
@@ -860,7 +860,7 @@ def current_filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.
         year_range=year_range,
         full_year_range=(year_min, year_max),
     )
-    return selected, exploded.loc[exploded_keys.isin(selected_keys)].copy(), labels
+    return selected, selected_genres, labels
 
 
 def render_sidebar_answer_body(answer: AgentAnswer, answer_index: int) -> None:
@@ -893,7 +893,7 @@ def render_sidebar_assistant(
     st.session_state.setdefault(AGENT_HISTORY_KEY, [])
     st.session_state.setdefault(AGENT_CONTEXT_KEY, None)
     st.session_state.setdefault(AGENT_PIN_CONTEXT_KEY, False)
-    memory = ensure_agent_memory(full_catalog, full_genres)
+    memory = cached_agent_memory(full_catalog, full_genres)
     api_key = os.getenv("OPENAI_API_KEY") or optional_secret("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL") or optional_secret("OPENAI_MODEL", "gpt-5.5")
     use_openai = bool(api_key)
@@ -913,6 +913,7 @@ def render_sidebar_assistant(
             refresh_memory = st.button("Refresh durable memory", use_container_width=True)
             if refresh_memory:
                 mark_agent_interaction()
+                cached_agent_memory.clear()
                 memory = build_agent_memory(full_catalog, full_genres)
                 save_agent_memory(memory)
                 st.rerun()
@@ -981,24 +982,16 @@ def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFram
     )
     year_range = st.sidebar.slider("Release years", year_min, year_max, key=FILTER_YEAR_RANGE_KEY)
 
-    mask = df["Released"].between(year_range[0], year_range[1])
-    if query:
-        mask &= df["SearchText"].str.contains(query, regex=False, na=False)
-    if genres:
-        album_keys = exploded.loc[exploded["Genre"].isin(genres), ["Artist", "Album", "Released"]].drop_duplicates()
-        key = pd.MultiIndex.from_frame(album_keys)
-        own_key = pd.MultiIndex.from_frame(df[["Artist", "Album", "Released"]])
-        mask &= own_key.isin(key)
-    if origins:
-        mask &= df["OriginLabel"].isin(origins)
-    if decades:
-        mask &= df["Decade"].isin(decades)
-    if statuses:
-        mask &= df["RatingStatus"].isin(statuses)
-
-    selected = df.loc[mask].copy()
-    selected_keys = pd.MultiIndex.from_frame(selected[["Artist", "Album", "Released"]])
-    exploded_keys = pd.MultiIndex.from_frame(exploded[["Artist", "Album", "Released"]])
+    selected, selected_genres = filtered_catalog(
+        df,
+        exploded,
+        query=query,
+        genres=tuple(genres),
+        origins=tuple(origins),
+        decades=tuple(decades),
+        statuses=tuple(statuses),
+        year_range=(int(year_range[0]), int(year_range[1])),
+    )
     labels = active_filter_labels(
         query=query,
         genres=genres,
@@ -1009,7 +1002,7 @@ def filtered_data(df: pd.DataFrame, exploded: pd.DataFrame) -> tuple[pd.DataFram
         full_year_range=(year_min, year_max),
     )
     render_active_filters(labels, year_min, year_max, active_filter_container)
-    return selected, exploded.loc[exploded_keys.isin(selected_keys)].copy(), labels
+    return selected, selected_genres, labels
 
 
 def main() -> None:
@@ -1065,13 +1058,7 @@ def main() -> None:
         left, right = st.columns([1.05, 1])
         with left:
             render_rating_key(selected["RatingStatus"])
-        rating_counts = (
-            selected["RatingStatus"]
-            .value_counts()
-            .reindex([r for r in RATING_ORDER if r in selected["RatingStatus"].unique()])
-            .reset_index()
-        )
-        rating_counts.columns = ["RatingStatus", "Albums"]
+        rating_counts, decade, timeline_df, decade_order, by_month = cached_catalog_tab_data(selected)
         rating_counts["Rating"] = rating_counts["RatingStatus"].map(rating_display_label)
         fig_rating = px.bar(
             rating_counts,
@@ -1088,11 +1075,6 @@ def main() -> None:
         fig_rating.update_layout(showlegend=False)
         left.plotly_chart(polish_chart(fig_rating, x_title=None, y_title="Albums"), use_container_width=True)
 
-        decade = (
-            selected.groupby("Decade", as_index=False)
-            .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"), AvgGlobal=("Global Rating", "mean"))
-            .sort_values("Decade")
-        )
         fig_decade = px.bar(
             decade,
             x="Decade",
@@ -1102,12 +1084,6 @@ def main() -> None:
         )
         right.plotly_chart(polish_chart(fig_decade, x_title=None, y_title="Albums"), use_container_width=True)
 
-        timeline_df = selected.sort_values(["Released", "Artist", "Album"]).copy()
-        timeline_df["TimelineSize"] = timeline_df["RatingNum"].fillna(2.5) + 3
-        decade_order = sorted(
-            timeline_df["Decade"].dropna().unique(),
-            key=lambda value: int(str(value).rstrip("s")),
-        )
         fig_release_timeline = px.scatter(
             timeline_df,
             x="Released",
@@ -1133,7 +1109,6 @@ def main() -> None:
             use_container_width=True,
         )
 
-        by_month = selected.dropna(subset=["MonthAdded"]).groupby("MonthAdded", as_index=False).size()
         fig_month = px.area(by_month, x="MonthAdded", y="size", title="Listening timeline")
         st.plotly_chart(
             polish_chart(fig_month, height=WIDE_CHART_HEIGHT, x_title=None, y_title="Albums"),
@@ -1148,13 +1123,7 @@ def main() -> None:
     elif section == "Taste":
         st.subheader("Taste")
 
-        genre_summary = (
-            selected_genres.groupby("Genre", as_index=False)
-            .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"), AvgGlobal=("Global Rating", "mean"))
-            .query("Albums >= 3")
-            .sort_values(["AvgRating", "Albums"], ascending=[False, False])
-        )
-        genre_summary["Delta"] = genre_summary["AvgRating"] - genre_summary["AvgGlobal"]
+        genre_summary, origin = cached_taste_tab_data(selected, selected_genres)
 
         left, right = st.columns([1, 1])
         fig_genre = px.bar(
@@ -1168,11 +1137,6 @@ def main() -> None:
         fig_genre.update_xaxes(range=[0, 5])
         left.plotly_chart(polish_chart(fig_genre, x_title="Avg rating", y_title=None), use_container_width=True)
 
-        origin = (
-            selected.groupby("OriginLabel", as_index=False)
-            .agg(Albums=("Album", "count"), AvgRating=("RatingNum", "mean"), AvgGlobal=("Global Rating", "mean"))
-            .sort_values("Albums", ascending=False)
-        )
         fig_origin = px.scatter(
             origin,
             x="AvgGlobal",
@@ -1187,7 +1151,7 @@ def main() -> None:
         fig_origin.update_yaxes(range=[1, 5])
         right.plotly_chart(polish_chart(fig_origin, x_title="Global", y_title="Rating"), use_container_width=True)
 
-        words = notes_keywords(selected)
+        words = cached_notes_keywords(selected)
         if not words.empty:
             fig_words = px.bar(
                 words.sort_values("Count"),
@@ -1288,8 +1252,7 @@ def main() -> None:
         }
         sort_label = st.selectbox("Sort albums", list(sort_options.keys()), index=0)
         sort_col, ascending = sort_options[sort_label]
-        table_df = selected.sort_values(sort_col, ascending=ascending, na_position="last").copy()
-        table_df["AlbumKey"] = table_df.apply(album_key, axis=1)
+        table_df = cached_explorer_table(selected, sort_col, ascending)
         album_labels = {
             row["AlbumKey"]: album_selector_label(row)
             for _, row in table_df[["AlbumKey", "Artist", "Album", "Released"]].iterrows()
