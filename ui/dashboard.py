@@ -80,6 +80,9 @@ from ui.styles import render_global_styles
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "albums.csv"
 EXPLORER_ALBUM_KEY = "explorer_album_key"
+PLOTLY_CONFIG = {"displayModeBar": False, "responsive": True}
+
+
 @st.cache_data(show_spinner=False)
 def cached_load_data(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     return load_data(path)
@@ -1073,7 +1076,11 @@ def main() -> None:
             color_discrete_map=RATING_COLOR_MAP,
         )
         fig_rating.update_layout(showlegend=False)
-        left.plotly_chart(polish_chart(fig_rating, x_title=None, y_title="Albums"), use_container_width=True)
+        left.plotly_chart(
+            polish_chart(fig_rating, x_title=None, y_title="Albums"),
+            use_container_width=True,
+            config=PLOTLY_CONFIG,
+        )
 
         fig_decade = px.bar(
             decade,
@@ -1082,7 +1089,11 @@ def main() -> None:
             color="AvgRating",
             title="Era spread",
         )
-        right.plotly_chart(polish_chart(fig_decade, x_title=None, y_title="Albums"), use_container_width=True)
+        right.plotly_chart(
+            polish_chart(fig_decade, x_title=None, y_title="Albums"),
+            use_container_width=True,
+            config=PLOTLY_CONFIG,
+        )
 
         fig_release_timeline = px.scatter(
             timeline_df,
@@ -1101,18 +1112,21 @@ def main() -> None:
             title="Album timeline",
             category_orders={"Decade": decade_order, "RatingStatus": RATING_ORDER},
             color_discrete_map=RATING_COLOR_MAP,
+            render_mode="webgl",
         )
         fig_release_timeline.update_traces(marker=dict(line=dict(width=0.7, color="rgba(49, 51, 63, 0.35)")))
         fig_release_timeline.update_xaxes(dtick=5)
         st.plotly_chart(
             polish_chart(fig_release_timeline, height=430, x_title="Release year", y_title=None),
             use_container_width=True,
+            config=PLOTLY_CONFIG,
         )
 
         fig_month = px.area(by_month, x="MonthAdded", y="size", title="Listening timeline")
         st.plotly_chart(
             polish_chart(fig_month, height=WIDE_CHART_HEIGHT, x_title=None, y_title="Albums"),
             use_container_width=True,
+            config=PLOTLY_CONFIG,
         )
 
     elif section == "Soundprint":
