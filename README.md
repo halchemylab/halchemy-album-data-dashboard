@@ -66,6 +66,11 @@ The Assistant also keeps a local `agent_memory.json` file with durable taste sig
 
 ## CSV schema
 
+The dashboard is designed to work with the exported CSV file from
+[1001 Albums Generator](https://1001albumsgenerator.com/), a site that gives
+you one album per day from *1001 Albums You Must Hear Before You Die* and lets
+you rate and review albums as you go.
+
 `albums.csv` must include these columns:
 
 | Column | Required value |
