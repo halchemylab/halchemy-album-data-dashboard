@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 REQUIRED_COLUMNS = [
     "Artist",
     "Album",
@@ -74,7 +73,7 @@ def short_cover_line(text: object, limit: int) -> str:
 
 
 def album_cover_data_uri(artist: object, album: object, genre: object) -> str:
-    key = f"{artist}|{album}|{genre}".encode("utf-8")
+    key = f"{artist}|{album}|{genre}".encode()
     digest = hashlib.sha256(key).digest()
     bg, accent, text = COVER_PALETTES[digest[0] % len(COVER_PALETTES)]
     angle = digest[1] % 360
@@ -141,10 +140,7 @@ def validate_albums_csv(df: pd.DataFrame) -> list[str]:
     )
     rating_invalid = ~rating_valid
     if rating_invalid.any():
-        errors.append(
-            "Rating must be 1-5, did-not-listen, or blank on row(s): "
-            + row_numbers(rating_invalid)
-        )
+        errors.append("Rating must be 1-5, did-not-listen, or blank on row(s): " + row_numbers(rating_invalid))
 
     return errors
 

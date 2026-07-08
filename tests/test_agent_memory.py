@@ -1,13 +1,14 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from test_data_validation import valid_row
+
 from album_data import load_data
 from album_memory import build_agent_memory, ensure_agent_memory, load_agent_memory
-from test_data_validation import valid_row
 
 
 def sample_catalog(tmp_path: Path):

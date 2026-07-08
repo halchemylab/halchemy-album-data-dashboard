@@ -4,3 +4,5 @@ pandas>=2.2
 plotly>=6.2
 openai>=1.99
 pytest>=8.0
+ruff>=0.12
+mypy>=1.17

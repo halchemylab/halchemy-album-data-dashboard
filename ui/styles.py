@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-
 GLOBAL_STYLES = """
 <style>
 .filter-strip {

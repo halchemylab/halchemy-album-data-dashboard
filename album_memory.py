@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from album_data import notes_keywords
-
 
 MEMORY_VERSION = 1
 MEMORY_PATH = Path(__file__).with_name("agent_memory.json")
@@ -76,7 +75,7 @@ def build_agent_memory(df: pd.DataFrame, exploded: pd.DataFrame) -> dict[str, An
     return {
         "version": MEMORY_VERSION,
         "catalog_signature": catalog_signature(df),
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "catalog": {
             "albums": int(len(df)),
             "rated": int(df["RatingNum"].notna().sum()),

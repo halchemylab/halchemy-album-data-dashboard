@@ -6,7 +6,6 @@ import streamlit as st
 
 from album_data import RATING_LABEL_MAP
 
-
 FILTER_SEARCH_KEY = "filter_search"
 FILTER_GENRES_KEY = "filter_genres"
 FILTER_ORIGINS_KEY = "filter_origins"

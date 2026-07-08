@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 MISSIONS_VERSION = 1
 MISSIONS_PATH = Path(__file__).with_name("listening_missions.json")
@@ -32,11 +31,10 @@ def save_missions(data: dict[str, Any], path: Path = MISSIONS_PATH) -> None:
 def add_mission(mission: dict[str, Any], path: Path = MISSIONS_PATH) -> dict[str, Any]:
     data = load_missions(path)
     missions = data["missions"]
-    mission_id = str(mission.get("id") or f"mission-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}")
+    mission_id = str(mission.get("id") or f"mission-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}")
     stored = {
-        "id": mission_id,
         "status": str(mission.get("status") or "not started"),
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         **mission,
         "id": mission_id,
     }

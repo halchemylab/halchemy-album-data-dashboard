@@ -1,7 +1,8 @@
 from agent.models import AgentAnswer, AgentContext, AgentMemory, AgentTraceStep, ProactivePrompt
 from agent.openai_runner import answer_question_with_openai
 from agent.router import choose_skill
-from agent.skills import answer_question, build_proactive_prompt, run_skill
+from agent.runtime import answer_question, run_skill
+from agent.skills import build_proactive_prompt
 
 __all__ = [
     "AgentAnswer",

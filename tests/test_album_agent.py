@@ -1,13 +1,14 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from test_data_validation import valid_row
+
 from album_agent import answer_question, answer_question_with_openai, build_proactive_prompt, choose_skill
 from album_data import load_data
-from test_data_validation import valid_row
 
 
 def sample_data(tmp_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:

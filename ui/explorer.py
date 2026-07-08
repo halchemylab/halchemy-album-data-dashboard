@@ -35,10 +35,7 @@ def display_date(value: object) -> str:
 
 def detail_row(label: str, value: object) -> None:
     st.markdown(
-        "<div class='detail-row'>"
-        f"<span>{escape(label)}</span>"
-        f"<strong>{escape(display_text(value))}</strong>"
-        "</div>",
+        f"<div class='detail-row'><span>{escape(label)}</span><strong>{escape(display_text(value))}</strong></div>",
         unsafe_allow_html=True,
     )
 

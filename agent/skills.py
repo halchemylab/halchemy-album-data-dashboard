@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import json
-import os
 import re
-from typing import Any, Callable
+from collections.abc import Callable, Mapping, Sequence
 
 import pandas as pd
 
 from agent.models import AgentAnswer, AgentContext, AgentMemory, AgentTraceStep, ProactivePrompt
-
 
 SkillHandler = Callable[[str, pd.DataFrame, pd.DataFrame], AgentAnswer]
 
@@ -58,7 +55,7 @@ def _clean_records(data: pd.DataFrame, limit: int = 8) -> list[dict[str, object]
     return clean.to_dict(orient="records")
 
 
-def _records_frame(records: list[dict[str, object]]) -> pd.DataFrame:
+def _records_frame(records: Sequence[Mapping[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
@@ -96,7 +93,7 @@ def _format_context_album(album: dict[str, object]) -> str:
 def _row_identity(row: pd.Series | dict[str, object]) -> tuple[str, str, int | None]:
     get = row.get if isinstance(row, dict) else row.__getitem__
     try:
-        released = int(get("Released"))
+        released = int(str(get("Released")))
     except (TypeError, ValueError):
         released = None
     return str(get("Artist")), str(get("Album")), released
@@ -219,8 +216,12 @@ def _explain_album_answer(question: str, df: pd.DataFrame, album: dict[str, obje
 
     parts = [
         f"{_format_album(source)} is in context.",
-        f"Your rating is {source['RatingNum']:.1f}." if pd.notna(source.get("RatingNum")) else "It is not personally rated yet.",
-        f"The global rating is {source['Global Rating']:.2f}." if pd.notna(source.get("Global Rating")) else "It has no global rating in the data.",
+        f"Your rating is {source['RatingNum']:.1f}."
+        if pd.notna(source.get("RatingNum"))
+        else "It is not personally rated yet.",
+        f"The global rating is {source['Global Rating']:.2f}."
+        if pd.notna(source.get("Global Rating"))
+        else "It has no global rating in the data.",
     ]
     if pd.notna(source.get("RatingDelta")):
         parts.append(f"That puts your taste gap at {source['RatingDelta']:+.2f}.")
@@ -268,10 +269,14 @@ def _compare_album_answer(question: str, df: pd.DataFrame, album: dict[str, obje
         },
     ]
     if pd.notna(source.get("RatingNum")):
-        relation = "above" if source["RatingNum"] > avg_rating else "below" if source["RatingNum"] < avg_rating else "right at"
+        relation = (
+            "above" if source["RatingNum"] > avg_rating else "below" if source["RatingNum"] < avg_rating else "right at"
+        )
         summary = f"{_format_album(source)} sits {relation} your current average personal rating of {avg_rating:.2f}."
     else:
-        summary = f"{_format_album(source)} is not personally rated yet, so only consensus and catalog context are available."
+        summary = (
+            f"{_format_album(source)} is not personally rated yet, so only consensus and catalog context are available."
+        )
     return AgentAnswer(
         question=question,
         summary=summary,
@@ -421,7 +426,9 @@ def _extract_year_range(question: str, df: pd.DataFrame) -> tuple[int, int] | No
 
 def _extract_search_text(question: str, df: pd.DataFrame) -> str:
     lowered = question.lower()
-    artists = _extract_filter_values(question, df["Artist"].dropna().unique().tolist() if "Artist" in df.columns else [])
+    artists = _extract_filter_values(
+        question, df["Artist"].dropna().unique().tolist() if "Artist" in df.columns else []
+    )
     albums = _extract_filter_values(question, df["Album"].dropna().unique().tolist() if "Album" in df.columns else [])
     candidates = albums or artists
     if candidates:
@@ -460,7 +467,10 @@ def set_dashboard_filters(
 ) -> AgentAnswer:
     arguments = arguments or {}
     lowered = question.lower()
-    reset = any(phrase in lowered for phrase in ["clear filters", "reset filters", "reset dashboard", "show everything", "all albums"])
+    reset = any(
+        phrase in lowered
+        for phrase in ["clear filters", "reset filters", "reset dashboard", "show everything", "all albums"]
+    )
     if reset:
         action = {"type": "set_filters", "clear_existing": True, "filters": {}}
         return AgentAnswer(
@@ -476,10 +486,18 @@ def set_dashboard_filters(
 
     filters: dict[str, object] = {
         "search": str(arguments.get("search", "") or "").strip() or _extract_search_text(question, df),
-        "genres": arguments.get("genres") if isinstance(arguments.get("genres"), list) else _extract_filter_values(question, valid_genres),
-        "origins": arguments.get("origins") if isinstance(arguments.get("origins"), list) else _extract_filter_values(question, valid_origins),
-        "decades": arguments.get("decades") if isinstance(arguments.get("decades"), list) else _extract_decades(question, df),
-        "statuses": arguments.get("statuses") if isinstance(arguments.get("statuses"), list) else _extract_statuses(question),
+        "genres": arguments.get("genres")
+        if isinstance(arguments.get("genres"), list)
+        else _extract_filter_values(question, valid_genres),
+        "origins": arguments.get("origins")
+        if isinstance(arguments.get("origins"), list)
+        else _extract_filter_values(question, valid_origins),
+        "decades": arguments.get("decades")
+        if isinstance(arguments.get("decades"), list)
+        else _extract_decades(question, df),
+        "statuses": arguments.get("statuses")
+        if isinstance(arguments.get("statuses"), list)
+        else _extract_statuses(question),
     }
     year_range = arguments.get("year_range")
     if isinstance(year_range, list) and len(year_range) == 2:
@@ -493,12 +511,37 @@ def set_dashboard_filters(
 
     valid_genre_set = {str(value).casefold(): str(value) for value in valid_genres}
     valid_origin_set = {str(value).casefold(): str(value) for value in valid_origins}
-    valid_decade_set = {str(value).casefold(): str(value) for value in df["Decade"].dropna().unique()} if "Decade" in df.columns else {}
+    valid_decade_set = (
+        {str(value).casefold(): str(value) for value in df["Decade"].dropna().unique()}
+        if "Decade" in df.columns
+        else {}
+    )
     valid_status_set = set(["1", "2", "3", "4", "5", "did-not-listen", "unrated"])
-    filters["genres"] = [valid_genre_set[str(value).casefold()] for value in filters["genres"] if str(value).casefold() in valid_genre_set]
-    filters["origins"] = [valid_origin_set[str(value).casefold()] for value in filters["origins"] if str(value).casefold() in valid_origin_set]
-    filters["decades"] = [valid_decade_set[str(value).casefold()] for value in filters["decades"] if str(value).casefold() in valid_decade_set]
-    filters["statuses"] = [str(value) for value in filters["statuses"] if str(value) in valid_status_set]
+    genre_filter = filters.get("genres", [])
+    origin_filter = filters.get("origins", [])
+    decade_filter = filters.get("decades", [])
+    status_filter = filters.get("statuses", [])
+
+    filters["genres"] = [
+        valid_genre_set[str(value).casefold()]
+        for value in (genre_filter if isinstance(genre_filter, list) else [])
+        if str(value).casefold() in valid_genre_set
+    ]
+    filters["origins"] = [
+        valid_origin_set[str(value).casefold()]
+        for value in (origin_filter if isinstance(origin_filter, list) else [])
+        if str(value).casefold() in valid_origin_set
+    ]
+    filters["decades"] = [
+        valid_decade_set[str(value).casefold()]
+        for value in (decade_filter if isinstance(decade_filter, list) else [])
+        if str(value).casefold() in valid_decade_set
+    ]
+    filters["statuses"] = [
+        str(value)
+        for value in (status_filter if isinstance(status_filter, list) else [])
+        if str(value) in valid_status_set
+    ]
 
     labels = _filter_action_labels(filters)
     if not labels:
@@ -581,7 +624,9 @@ def dashboard_walkthrough(
 
     rated = selected.dropna(subset=["RatingNum"]).copy()
     gaps = selected.dropna(subset=["RatingNum", "Global Rating", "RatingDelta"]).copy()
-    top_album = _album_label_or_dash(rated.sort_values(["RatingNum", "Global Rating"], ascending=[False, False]).head(1))
+    top_album = _album_label_or_dash(
+        rated.sort_values(["RatingNum", "Global Rating"], ascending=[False, False]).head(1)
+    )
     top_genre, top_genre_metric = _top_genre_summary(selected_genres)
 
     rows = [
@@ -614,11 +659,14 @@ def dashboard_walkthrough(
             ),
         },
     ]
-    summary = (
-        f"I built a guided walkthrough for {len(selected):,} albums"
-        + (f" and applied filters: {'; '.join(filter_labels)}." if filter_labels else " using the current dashboard filters.")
+    summary = f"I built a guided walkthrough for {len(selected):,} albums" + (
+        f" and applied filters: {'; '.join(filter_labels)}."
+        if filter_labels
+        else " using the current dashboard filters."
     )
-    dashboard_action = {"type": "set_filters", "clear_existing": clear_existing, "filters": filters} if filter_labels else None
+    dashboard_action = (
+        {"type": "set_filters", "clear_existing": clear_existing, "filters": filters} if filter_labels else None
+    )
     return AgentAnswer(
         question=question,
         summary=summary,
@@ -670,9 +718,13 @@ def catalog_overview(question: str, df: pd.DataFrame, exploded: pd.DataFrame) ->
         ["RatingNum", "Global Rating", "Released"],
         ascending=[False, False, False],
     )
-    genre_counts = exploded.groupby("Genre", as_index=False).agg(Albums=("Album", "count")).sort_values(
-        "Albums",
-        ascending=False,
+    genre_counts = (
+        exploded.groupby("Genre", as_index=False)
+        .agg(Albums=("Album", "count"))
+        .sort_values(
+            "Albums",
+            ascending=False,
+        )
     )
     top_genre = genre_counts.iloc[0]["Genre"] if not genre_counts.empty else "unknown"
     summary = (
@@ -707,7 +759,9 @@ def recommendations(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> 
     artist = _extract_artist(question, df)
     if genre:
         keys = exploded.loc[exploded["Genre"].str.casefold().eq(genre.casefold()), ["Artist", "Album", "Released"]]
-        data = data.loc[pd.MultiIndex.from_frame(data[["Artist", "Album", "Released"]]).isin(pd.MultiIndex.from_frame(keys))]
+        data = data.loc[
+            pd.MultiIndex.from_frame(data[["Artist", "Album", "Released"]]).isin(pd.MultiIndex.from_frame(keys))
+        ]
     if decade:
         data = data.loc[data["Decade"].eq(decade)]
     if artist:
@@ -781,7 +835,7 @@ def playlist_builder(
     count = _extract_count(question)
     if arguments.get("count"):
         try:
-            count = max(2, min(8, int(arguments["count"])))
+            count = max(2, min(8, int(str(arguments["count"]))))
         except (TypeError, ValueError):
             count = _extract_count(question)
 
@@ -872,9 +926,8 @@ def playlist_builder(
     context = ", ".join(part for part in [genre, decade, artist] if part)
     scope = f" for {context}" if context else ""
     constraints = sum(1 for part in [genre, decade, artist] if part)
-    summary = (
-        f"I built a {len(rows)}-album {angle}{scope}, sequenced from opener to closer."
-        + _confidence_sentence(len(candidates), constraints=constraints)
+    summary = f"I built a {len(rows)}-album {angle}{scope}, sequenced from opener to closer." + _confidence_sentence(
+        len(candidates), constraints=constraints
     )
     return AgentAnswer(question=question, summary=summary, detail=_records_frame(rows), skill="playlist_builder")
 
@@ -985,8 +1038,7 @@ def genre_analysis(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> A
             )
         summary = (
             f"For {genre}, you have {len(genre_data):,} rated albums with an average rating "
-            f"of {genre_data['RatingNum'].mean():.2f}."
-            + _confidence_sentence(len(genre_data), constraints=1)
+            f"of {genre_data['RatingNum'].mean():.2f}." + _confidence_sentence(len(genre_data), constraints=1)
         )
         detail = genre_data.sort_values(["RatingNum", "Global Rating"], ascending=[False, False])
         return AgentAnswer(
@@ -1013,8 +1065,7 @@ def genre_analysis(question: str, df: pd.DataFrame, exploded: pd.DataFrame) -> A
     top = summary_df.iloc[0]
     summary = (
         f"Your strongest genre signal is {top['Genre']} with {top['Albums']:.0f} albums "
-        f"averaging {top['AvgRating']:.2f}."
-        + _confidence_sentence(int(summary_df["Albums"].sum()))
+        f"averaging {top['AvgRating']:.2f}." + _confidence_sentence(int(summary_df["Albums"].sum()))
     )
     return AgentAnswer(
         question=question,
@@ -1196,11 +1247,7 @@ def build_proactive_prompt(
             key=f"unresolved:{_row_identity(top)}",
             message=(
                 f"I found a useful loose end: {album} is still unresolved here"
-                + (
-                    f" with a {top['Global Rating']:.2f} global signal."
-                    if pd.notna(top.get("Global Rating"))
-                    else "."
-                )
+                + (f" with a {top['Global Rating']:.2f} global signal." if pd.notna(top.get("Global Rating")) else ".")
                 + " Want me to turn it into a short listening mission?"
             ),
             actions=("Create a listening mission", "Show unresolved high-signal albums", "Try another idea"),
@@ -1226,7 +1273,11 @@ def build_proactive_prompt(
                     f"Want to test a theory? {top['Genre']} is your strongest repeated signal in this slice: "
                     f"{int(top['Albums'])} albums averaging {top['AvgRating']:.2f}."
                 ),
-                actions=("What hypotheses explain my taste patterns?", f"Show me more {top['Genre']}", "Build a starter pack"),
+                actions=(
+                    "What hypotheses explain my taste patterns?",
+                    f"Show me more {top['Genre']}",
+                    "Build a starter pack",
+                ),
                 reason=(
                     "This surfaced because repeated high ratings in one genre are useful evidence for a "
                     "taste hypothesis, not just a one-off favorite."
@@ -1242,7 +1293,11 @@ def build_proactive_prompt(
                 f"There is a sharp taste split hiding here: {_format_album(strongest)} is "
                 f"{strongest['RatingDelta']:+.2f} away from consensus. Want to inspect that pattern?"
             ),
-            actions=("Where do I disagree with consensus?", "Compare against my overall taste", "Create a taste report"),
+            actions=(
+                "Where do I disagree with consensus?",
+                "Compare against my overall taste",
+                "Create a taste report",
+            ),
             reason=(
                 "This surfaced because large personal-versus-global gaps often reveal what your taste values "
                 "differently from consensus."
@@ -1447,611 +1502,3 @@ SKILLS: dict[str, SkillHandler] = {
     "dashboard_walkthrough": lambda question, df, exploded: dashboard_walkthrough(question, df, exploded),
     "set_dashboard_filters": lambda question, df, exploded: set_dashboard_filters(question, df, exploded),
 }
-
-
-AGENT_TOOLS = [
-    {
-        "type": "function",
-        "name": "catalog_overview",
-        "description": "Summarize the current filtered album catalog, including counts, average ratings, and common genres.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "recommendations",
-        "description": "Recommend high-signal albums from the current filtered catalog. Can narrow by genre, decade, or artist.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "genre": {"type": "string", "description": "Optional genre to narrow recommendations."},
-                "decade": {"type": "string", "description": "Optional decade such as 1970s or 1990s."},
-                "artist": {"type": "string", "description": "Optional artist name to narrow recommendations."},
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "playlist_builder",
-        "description": "Build a sequenced listening path, starter pack, revisit queue, or short playlist from the current filtered catalog.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "count": {
-                    "type": "integer",
-                    "description": "Number of albums to include, from 2 through 8.",
-                },
-                "genre": {"type": "string", "description": "Optional genre to narrow the playlist."},
-                "decade": {"type": "string", "description": "Optional decade such as 1970s or 1990s."},
-                "artist": {"type": "string", "description": "Optional artist name to narrow the playlist."},
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "listening_mission",
-        "description": "Create an actionable listening mission with a familiar anchor, stretch picks, and progress-ready steps.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "taste_gaps",
-        "description": "Find where personal ratings differ most from global ratings.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "direction": {
-                    "type": "string",
-                    "enum": ["above", "below", "both"],
-                    "description": "Use above for underrated-by-consensus albums, below for overrated-by-consensus albums, or both.",
-                }
-            },
-            "required": ["direction"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "genre_analysis",
-        "description": "Analyze genre-level taste patterns or summarize one specific genre.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "genre": {"type": "string", "description": "Optional specific genre to inspect."}
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "notes_search",
-        "description": "Search freeform album notes for words or phrases.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "terms": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Words or short phrases that must appear in the notes.",
-                }
-            },
-            "required": ["terms"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "taste_hypotheses",
-        "description": "Generate testable hypotheses about the user's music taste, with evidence, counterexamples, and next actions.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "story_insights",
-        "description": "Create capstone-friendly narrative insights backed by rows from the current filtered catalog.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "dashboard_walkthrough",
-        "description": "Guide the user through a dashboard slice by setting filters and returning a step-by-step analysis path.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "search": {"type": "string", "description": "Optional search text for artist, album, notes, or genres."},
-                "genres": {"type": "array", "items": {"type": "string"}, "description": "Genres to select."},
-                "origins": {"type": "array", "items": {"type": "string"}, "description": "Origin labels to select."},
-                "decades": {"type": "array", "items": {"type": "string"}, "description": "Decades such as 1970s."},
-                "statuses": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]},
-                    "description": "Personal rating statuses to select.",
-                },
-                "year_range": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "Optional [start_year, end_year] release-year range.",
-                },
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "set_dashboard_filters",
-        "description": "Change the dashboard filters when the user asks to show, filter, focus, narrow, reset, or clear the dashboard.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "search": {"type": "string", "description": "Optional search text for artist, album, notes, or genres."},
-                "genres": {"type": "array", "items": {"type": "string"}, "description": "Genres to select."},
-                "origins": {"type": "array", "items": {"type": "string"}, "description": "Origin labels to select."},
-                "decades": {"type": "array", "items": {"type": "string"}, "description": "Decades such as 1970s."},
-                "statuses": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["1", "2", "3", "4", "5", "did-not-listen", "unrated"]},
-                    "description": "Personal rating statuses to select.",
-                },
-                "year_range": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "Optional [start_year, end_year] release-year range.",
-                },
-            },
-            "additionalProperties": False,
-        },
-    },
-]
-
-
-def choose_skill(question: str) -> str:
-    lowered = question.lower()
-    if any(phrase in lowered for phrase in ["walk me through", "guide me through", "dashboard walkthrough", "guided tour"]):
-        return "dashboard_walkthrough"
-    if any(phrase in lowered for phrase in ["clear filters", "reset filters", "reset dashboard", "show everything"]):
-        return "set_dashboard_filters"
-    if any(
-        phrase in lowered
-        for phrase in [
-            "mission",
-            "listening mission",
-            "discovery mission",
-            "help me discover",
-            "what should i explore",
-            "next listening goal",
-        ]
-    ):
-        return "listening_mission"
-    if any(
-        phrase in lowered
-        for phrase in [
-            "playlist",
-            "listening path",
-            "listening queue",
-            "starter pack",
-            "mixtape",
-            "sequence",
-            "tonight",
-            "revisit queue",
-            "bridge me",
-        ]
-    ):
-        return "playlist_builder"
-    filter_verbs = ["filter", "set filters", "show me", "only show", "focus on", "narrow to", "switch to"]
-    filter_terms = [
-        "unrated",
-        "not rated",
-        "did not listen",
-        "skipped",
-        "albums from",
-        "from the",
-        "in the",
-        "rock",
-        "pop",
-        "jazz",
-        "hip-hop",
-        "hip hop",
-        "folk",
-        "soul",
-    ]
-    if any(verb in lowered for verb in filter_verbs) and (
-        any(term in lowered for term in filter_terms) or re.search(r"\b(?:19|20)?\d0'?s\b", lowered)
-    ):
-        return "set_dashboard_filters"
-    if any(
-        word in lowered
-        for word in [
-            "hypothesis",
-            "hypotheses",
-            "theory",
-            "theories",
-            "pattern",
-            "patterns",
-        ]
-    ):
-        return "taste_hypotheses"
-    if any(
-        word in lowered
-        for word in [
-            "insight",
-            "story",
-            "presentation",
-            "summarize my taste",
-            "takeaway",
-            "report",
-            "profile",
-            "slide",
-            "deck",
-            "one-page",
-            "one page",
-        ]
-    ):
-        return "story_insights"
-    if any(word in lowered for word in ["recommend", "suggest", "should i listen", "best", "favorite", "top"]):
-        return "recommendations"
-    if any(word in lowered for word in ["gap", "consensus", "overrated", "underrated", "global"]):
-        return "taste_gaps"
-    if "genre" in lowered or any(word in lowered for word in ["rock", "pop", "jazz", "hip-hop", "hip hop", "folk", "soul"]):
-        return "genre_analysis"
-    if any(word in lowered for word in ["note", "notes", "mention", "find"]):
-        return "notes_search"
-    return "catalog_overview"
-
-
-def run_skill(
-    skill_name: str,
-    question: str,
-    df: pd.DataFrame,
-    exploded: pd.DataFrame,
-    arguments: dict[str, object] | None = None,
-) -> AgentAnswer:
-    arguments = arguments or {}
-    if skill_name == "dashboard_walkthrough":
-        return dashboard_walkthrough(question, df, exploded, arguments)
-    if skill_name == "set_dashboard_filters":
-        return set_dashboard_filters(question, df, exploded, arguments)
-    if skill_name == "recommendations":
-        selected, selected_genres = _filter_skill_data(
-            df,
-            exploded,
-            genre=str(arguments["genre"]) if arguments.get("genre") else None,
-            decade=str(arguments["decade"]) if arguments.get("decade") else None,
-            artist=str(arguments["artist"]) if arguments.get("artist") else None,
-        )
-        return recommendations(question, selected, selected_genres)
-    if skill_name == "playlist_builder":
-        return playlist_builder(question, df, exploded, arguments)
-    if skill_name == "taste_gaps":
-        direction = str(arguments.get("direction", "above"))
-        skill_question = question
-        if direction == "below":
-            skill_question = question + " below lower overrated"
-        return taste_gaps(skill_question, df, exploded)
-    if skill_name == "genre_analysis" and arguments.get("genre"):
-        return genre_analysis(f"{question} {arguments['genre']}", df, exploded)
-    if skill_name == "notes_search":
-        terms = arguments.get("terms")
-        if isinstance(terms, list) and terms:
-            return notes_search("Find notes that mention " + " ".join(str(term) for term in terms), df, exploded)
-    return SKILLS.get(skill_name, catalog_overview)(question, df, exploded)
-
-
-def answer_question(
-    question: str,
-    df: pd.DataFrame,
-    exploded: pd.DataFrame,
-    context: AgentContext | None = None,
-    memory: AgentMemory | None = None,
-    filter_df: pd.DataFrame | None = None,
-    filter_exploded: pd.DataFrame | None = None,
-) -> AgentAnswer:
-    cleaned = question.strip()
-    if not cleaned:
-        return AgentAnswer(
-            question=question,
-            summary="Ask me about recommendations, genre patterns, taste gaps, notes, or the current catalog.",
-            detail=_empty_detail(),
-            skill="help",
-        )
-    followup = answer_context_followup(cleaned, df, context)
-    if followup is not None:
-        return _with_trace(
-            followup,
-            _scope_trace(df, exploded),
-            AgentTraceStep("Memory", "Loaded durable taste memory." if memory else "No durable taste memory was loaded."),
-            AgentTraceStep("Plan", "Resolved the question as a follow-up using the active agent context."),
-            AgentTraceStep("Tool", "Ran the context_followup skill against the filtered catalog."),
-            _rows_trace(followup),
-        )
-    skill_name = choose_skill(cleaned)
-    uses_full_catalog = skill_name in {"dashboard_walkthrough", "set_dashboard_filters"}
-    skill_df = filter_df if uses_full_catalog and filter_df is not None else df
-    skill_exploded = filter_exploded if uses_full_catalog and filter_exploded is not None else exploded
-    answer = SKILLS[skill_name](cleaned, skill_df, skill_exploded)
-    return _with_trace(
-        answer,
-        _scope_trace(df, exploded),
-        AgentTraceStep("Memory", "Loaded durable taste memory." if memory else "No durable taste memory was loaded."),
-        AgentTraceStep("Plan", f"Classified the request as {skill_name}."),
-        AgentTraceStep("Tool", f"Ran the {skill_name} skill with deterministic pandas analysis."),
-        _rows_trace(answer),
-    )
-
-
-def context_summary(context: AgentContext | None) -> str:
-    if not context:
-        return "No previous agent context is active."
-    lines = [
-        f"Previous question: {context.get('last_question', '-')}",
-        f"Previous skill: {context.get('last_skill', '-')}",
-        f"Previous summary: {context.get('last_summary', '-')}",
-    ]
-    selected = context.get("selected_album")
-    if isinstance(selected, dict):
-        lines.append(f"Selected album from previous result: {_format_context_album(selected)}")
-    rows = _context_rows(context)[:5]
-    if rows:
-        row_text = "; ".join(f"{index + 1}. {_format_context_album(row)}" for index, row in enumerate(rows))
-        lines.append(f"Previous result rows: {row_text}")
-    return "\n".join(lines)
-
-
-def memory_summary(memory: AgentMemory | None) -> str:
-    if not memory:
-        return "No durable taste memory is active."
-    catalog = memory.get("catalog", {})
-    lines = [
-        "Durable taste memory:",
-        (
-            f"{catalog.get('albums', 0):,} albums, {catalog.get('rated', 0):,} rated, "
-            f"{catalog.get('unrated', 0):,} unresolved, {catalog.get('genres', 0):,} genres."
-        ),
-    ]
-    favorite_genres = memory.get("favorite_genres", [])
-    if isinstance(favorite_genres, list) and favorite_genres:
-        labels = [
-            f"{item.get('Genre')} ({float(item.get('AvgRating', 0)):.2f})"
-            for item in favorite_genres[:3]
-            if isinstance(item, dict)
-        ]
-        if labels:
-            lines.append("Favorite genre signals: " + ", ".join(labels))
-    reliable_artists = memory.get("reliable_artists", [])
-    if isinstance(reliable_artists, list) and reliable_artists:
-        labels = [
-            f"{item.get('Artist')} ({float(item.get('AvgRating', 0)):.2f})"
-            for item in reliable_artists[:3]
-            if isinstance(item, dict)
-        ]
-        if labels:
-            lines.append("Reliable artists: " + ", ".join(labels))
-    above_consensus = memory.get("above_consensus", [])
-    if isinstance(above_consensus, list) and above_consensus:
-        labels = [
-            _format_context_album(item)
-            for item in above_consensus[:2]
-            if isinstance(item, dict)
-        ]
-        if labels:
-            lines.append("Recurring above-consensus examples: " + "; ".join(labels))
-    unresolved = memory.get("unresolved_queue", [])
-    if isinstance(unresolved, list) and unresolved:
-        labels = [
-            _format_context_album(item)
-            for item in unresolved[:3]
-            if isinstance(item, dict)
-        ]
-        if labels:
-            lines.append("Unresolved listening queue: " + "; ".join(labels))
-    return "\n".join(lines)
-
-
-def _get_response_text(response: object) -> str:
-    output_text = getattr(response, "output_text", None)
-    if output_text:
-        return str(output_text)
-
-    chunks: list[str] = []
-    for item in getattr(response, "output", []) or []:
-        for content in getattr(item, "content", []) or []:
-            text = getattr(content, "text", None)
-            if text:
-                chunks.append(str(text))
-    return "\n".join(chunks).strip()
-
-
-def _function_calls(response: object) -> list[object]:
-    return [
-        item
-        for item in getattr(response, "output", []) or []
-        if getattr(item, "type", None) == "function_call"
-    ]
-
-
-def answer_question_with_openai(
-    question: str,
-    df: pd.DataFrame,
-    exploded: pd.DataFrame,
-    *,
-    api_key: str | None = None,
-    model: str | None = None,
-    context: AgentContext | None = None,
-    memory: AgentMemory | None = None,
-    filter_df: pd.DataFrame | None = None,
-    filter_exploded: pd.DataFrame | None = None,
-) -> AgentAnswer:
-    cleaned = question.strip()
-    if not cleaned:
-        return answer_question(
-            question,
-            df,
-            exploded,
-            context=context,
-            memory=memory,
-            filter_df=filter_df,
-            filter_exploded=filter_exploded,
-        )
-
-    resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
-    if not resolved_api_key:
-        fallback = answer_question(
-            question,
-            df,
-            exploded,
-            context=context,
-            memory=memory,
-            filter_df=filter_df,
-            filter_exploded=filter_exploded,
-        )
-        return AgentAnswer(
-            question=fallback.question,
-            summary=fallback.summary,
-            detail=fallback.detail,
-            skill=fallback.skill,
-            mode="deterministic fallback",
-            trace=(
-                AgentTraceStep("Plan", "No OpenAI API key was configured, so the local router handled the request."),
-                *fallback.trace,
-            ),
-            dashboard_action=fallback.dashboard_action,
-        )
-
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("Install the openai package to use the OpenAI-backed agent.") from exc
-
-    client = OpenAI(api_key=resolved_api_key)
-    selected_summary = (
-        f"Current filtered data: {len(df):,} albums, "
-        f"{df['RatingNum'].notna().sum():,} personally rated, "
-        f"{exploded['Genre'].nunique():,} genres. "
-        f"Available columns: {', '.join(df.columns)}."
-    )
-    input_items: list[dict[str, object]] = [
-        {
-            "role": "system",
-            "content": (
-                "You are a skill-based album analytics agent inside a Streamlit dashboard. "
-                "Use the provided tools for factual answers. Do not invent albums, ratings, genres, or notes. "
-                "When the user asks a follow-up, use the previous context to resolve phrases like this, that, "
-                "the second one, more like this, or why. "
-                "Keep answers concise, distinguish evidence from interpretation, and cite the skill result "
-                "in plain language. Calibrate certainty: say when a recommendation or pattern is high, medium, "
-                "or low confidence based on the amount and specificity of evidence."
-            ),
-        },
-        {"role": "user", "content": selected_summary},
-        {"role": "user", "content": "Previous agent context:\n" + context_summary(context)},
-        {"role": "user", "content": memory_summary(memory)},
-        {"role": "user", "content": cleaned},
-    ]
-
-    response = client.responses.create(
-        model=model or os.getenv("OPENAI_MODEL", "gpt-5.5"),
-        input=input_items,
-        tools=AGENT_TOOLS,
-        tool_choice="auto",
-    )
-
-    calls = _function_calls(response)
-    if not calls:
-        text = _get_response_text(response)
-        fallback = answer_question(
-            cleaned,
-            df,
-            exploded,
-            context=context,
-            memory=memory,
-            filter_df=filter_df,
-            filter_exploded=filter_exploded,
-        )
-        return AgentAnswer(
-            question=cleaned,
-            summary=text or fallback.summary,
-            detail=fallback.detail,
-            skill=fallback.skill,
-            mode="openai",
-            trace=(
-                _scope_trace(df, exploded),
-                AgentTraceStep("Plan", "Asked OpenAI to route the request, but it answered without a tool call."),
-                AgentTraceStep("Tool", f"Used the local {fallback.skill} skill for evidence rows."),
-                _rows_trace(fallback),
-            ),
-            dashboard_action=fallback.dashboard_action,
-        )
-
-    for item in getattr(response, "output", []) or []:
-        if hasattr(item, "model_dump"):
-            input_items.append(item.model_dump(exclude_none=True))
-        else:
-            input_items.append(item)
-    last_answer: AgentAnswer | None = None
-    for call in calls:
-        raw_arguments = getattr(call, "arguments", "{}") or "{}"
-        try:
-            arguments = json.loads(raw_arguments)
-        except json.JSONDecodeError:
-            arguments = {}
-        skill_name = str(getattr(call, "name", "catalog_overview"))
-        uses_full_catalog = skill_name in {"dashboard_walkthrough", "set_dashboard_filters"}
-        skill_df = filter_df if uses_full_catalog and filter_df is not None else df
-        skill_exploded = filter_exploded if uses_full_catalog and filter_exploded is not None else exploded
-        last_answer = run_skill(skill_name, cleaned, skill_df, skill_exploded, arguments)
-        argument_text = ", ".join(f"{key}={value}" for key, value in arguments.items()) or "no arguments"
-        input_items.append(
-            {
-                "type": "function_call_output",
-                "call_id": getattr(call, "call_id"),
-                "output": json.dumps(_skill_payload(last_answer), default=str),
-            }
-        )
-
-    final_response = client.responses.create(
-        model=model or os.getenv("OPENAI_MODEL", "gpt-5.5"),
-        input=input_items,
-        tools=AGENT_TOOLS,
-    )
-    final_text = _get_response_text(final_response)
-    if last_answer is None:
-        last_answer = answer_question(
-            cleaned,
-            df,
-            exploded,
-            context=context,
-            memory=memory,
-            filter_df=filter_df,
-            filter_exploded=filter_exploded,
-        )
-    return AgentAnswer(
-        question=cleaned,
-        summary=final_text or last_answer.summary,
-        detail=last_answer.detail,
-        skill=last_answer.skill,
-        mode="openai",
-        trace=(
-            _scope_trace(df, exploded),
-            AgentTraceStep("Plan", "Asked OpenAI to choose the best album-analysis tool."),
-            AgentTraceStep("Tool", f"OpenAI called {last_answer.skill} with {argument_text}."),
-            _rows_trace(last_answer),
-            AgentTraceStep("Explain", "Sent the tool result back to OpenAI for the final wording."),
-        ),
-        dashboard_action=last_answer.dashboard_action,
-    )

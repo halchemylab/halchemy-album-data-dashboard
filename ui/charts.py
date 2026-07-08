@@ -8,7 +8,6 @@ import streamlit as st
 from album_data import RATING_ORDER
 from ui.filters import rating_display_label
 
-
 RATING_COLOR_MAP = {
     "1": "#d73027",
     "2": "#f46d43",

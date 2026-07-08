@@ -52,7 +52,9 @@ def cached_notes_keywords(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def cached_catalog_tab_data(selected: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame]:
+def cached_catalog_tab_data(
+    selected: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame]:
     rating_counts = (
         selected["RatingStatus"]
         .value_counts()
@@ -96,11 +98,7 @@ def cached_taste_tab_data(selected: pd.DataFrame, selected_genres: pd.DataFrame)
 def cached_explorer_table(selected: pd.DataFrame, sort_col: str, ascending: bool) -> pd.DataFrame:
     table = selected.sort_values(sort_col, ascending=ascending, na_position="last").copy()
     table["AlbumKey"] = (
-        table["Artist"].astype(str)
-        + "\0"
-        + table["Album"].astype(str)
-        + "\0"
-        + table["Released"].astype(str)
+        table["Artist"].astype(str) + "\0" + table["Album"].astype(str) + "\0" + table["Released"].astype(str)
     )
     return table
 
