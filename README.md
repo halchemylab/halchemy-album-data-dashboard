@@ -1,6 +1,6 @@
 # Halchemy Album Data Dashboard
 
-A Streamlit dashboard for exploring `albums.csv`: ratings, genres, eras, notes, and personal-vs-global taste gaps.
+An interactive music taste analytics dashboard with an AI-assisted analysis layer. It turns album ratings, genres, notes, eras, and personal-vs-global taste gaps into explorable charts, recommendations, listening missions, and data-backed taste hypotheses.
 
 ![Halchemy Album Dashboard main screen](assets/dashboard-screenshot.png)
 
