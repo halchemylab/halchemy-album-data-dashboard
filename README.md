@@ -2,6 +2,8 @@
 
 A Streamlit dashboard for exploring `albums.csv`: ratings, genres, eras, notes, and personal-vs-global taste gaps.
 
+![Halchemy Album Dashboard main screen](assets/dashboard-screenshot.png)
+
 The dashboard also includes a sidebar **Assistant**. It is a skill-based data agent: the chat interface sends questions to an agent layer, the agent chooses an album-analysis skill, the skill runs deterministic pandas analysis over the currently filtered data, and the answer is summarized back in the UI. When the answer includes a dashboard action, the assistant applies the relevant filters automatically.
 
 Agentic features include natural-language recommendations, genre and taste-gap analysis, notes search, durable taste memory, follow-up context, one-page taste reports, slide-style story insights, guided dashboard walkthroughs that can apply filters for you, listening missions, and data-backed taste hypotheses.
