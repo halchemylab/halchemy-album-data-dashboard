@@ -15,7 +15,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app is CSV-first. Add more rows to `albums.csv`, rerun Streamlit, and the dashboard will recalculate filters, charts, and tables.
+The repo includes `sample_albums.csv` so the dashboard runs immediately after install. For your own catalog, create a local `albums.csv` with the same schema; the app will use it automatically when present. `albums.csv` is ignored by git so personal notes and ratings stay private.
 
 ## Assistant
 

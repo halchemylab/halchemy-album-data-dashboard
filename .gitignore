@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
 .streamlit/secrets.toml
+albums.csv
 agent_memory.json
 listening_missions.json

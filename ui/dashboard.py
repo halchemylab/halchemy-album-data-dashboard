@@ -40,7 +40,10 @@ from ui.filters import (
 )
 from ui.styles import render_global_styles
 
-DATA_PATH = Path(__file__).resolve().parents[1] / "albums.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PRIVATE_DATA_PATH = PROJECT_ROOT / "albums.csv"
+SAMPLE_DATA_PATH = PROJECT_ROOT / "sample_albums.csv"
+DATA_PATH = PRIVATE_DATA_PATH if PRIVATE_DATA_PATH.exists() else SAMPLE_DATA_PATH
 EXPLORER_ALBUM_KEY = "explorer_album_key"
 PLOTLY_CONFIG = {"displayModeBar": False, "responsive": True}
 
