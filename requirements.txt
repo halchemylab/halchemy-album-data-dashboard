@@ -1,8 +1,8 @@
-streamlit>=1.47
-streamlit-autorefresh>=1.0
-pandas>=2.2
-plotly>=6.2
-openai>=1.99
-pytest>=8.0
-ruff>=0.12
-mypy>=1.17
+streamlit==1.47.0
+streamlit-autorefresh==1.0.1
+pandas==2.3.1
+plotly==6.2.0
+openai==1.97.0
+pytest==8.4.2
+ruff==0.15.20
+mypy==2.2.0
